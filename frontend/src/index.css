@@ -1,0 +1,106 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  /* Premium medical cobalt/royal blue & clean white palette based on Disin Healthcare */
+  --bg-color: #f0f4fa;              /* Gentle medical light ice-blue background */
+  --card-bg: #ffffff;               /* Pure clinical white card background */
+  --card-bg-hover: #eaf1fa;         /* Light blue-tinted hover and input background */
+  --border-color: #cbdcf0;          /* Soft layout borders */
+  --border-color-dark: #9abce2;     /* Accent borders for active states */
+  --text-primary: #0a1c3d;          /* Deep rich navy for prominent headings */
+  --text-primary-light: #162e5c;    /* Slightly lighter navy for subheadings */
+  --text-secondary: #3b567d;        /* Professional slate-blue for labels and details */
+  --text-secondary-light: #526f96;  /* Soft secondary text color */
+  
+  --accent-primary: #0049D6;        /* Disin Healthcare Medical Cobalt Blue */
+  --accent-secondary: #2563eb;      /* Medium blue hover */
+  --accent-dark: #0038a8;           /* Deep blue active state */
+  --accent-sky: #0a1931;            /* Rich deep navy blue accent */
+}
+
+@layer base {
+  body {
+    background-color: var(--bg-color);
+    color: var(--text-primary);
+    font-family: 'Fabric Grotesk', 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    background-image: 
+      radial-gradient(at 0% 0%, rgba(0, 73, 214, 0.12) 0px, transparent 50%),
+      radial-gradient(at 100% 100%, rgba(10, 25, 49, 0.08) 0px, transparent 50%);
+    background-attachment: fixed;
+  }
+
+  /* Custom surgical scrollbar styling */
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+  ::-webkit-scrollbar-track {
+    background: var(--bg-color);
+  }
+  ::-webkit-scrollbar-thumb {
+    background: var(--border-color-dark);
+    border-radius: 9999px;
+  }
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--accent-primary);
+  }
+}
+
+/* Premium Light Glassmorphism utilities mapping */
+.glass {
+  background: rgba(255, 255, 255, 0.85);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid rgba(77, 124, 179, 0.18);
+  box-shadow: 0 8px 32px 0 rgba(30, 61, 107, 0.04);
+}
+
+.glass-teal {
+  background: rgba(77, 124, 179, 0.12);
+  backdrop-filter: blur(10px);
+  -webkit-backdrop-filter: blur(10px);
+  border: 1px solid rgba(77, 124, 179, 0.25);
+}
+
+/* Premium Slate-Blue neon pulse animation */
+@keyframes neon-glow {
+  0%, 100% {
+    box-shadow: 0 0 6px rgba(77, 124, 179, 0.25), 0 0 12px rgba(77, 124, 179, 0.12);
+    border-color: rgba(77, 124, 179, 0.4);
+  }
+  50% {
+    box-shadow: 0 0 14px rgba(77, 124, 179, 0.45), 0 0 24px rgba(77, 124, 179, 0.25);
+    border-color: var(--accent-primary);
+  }
+}
+
+.glow-verified {
+  animation: neon-glow 3.5s infinite ease-in-out;
+}
+
+/* Speedometer needle rotation helper */
+.trust-needle {
+  transform-origin: 50% 100%;
+  transition: transform 1.5s cubic-bezier(0.175, 0.885, 0.32, 1.275);
+}
+
+/* Ensure all form inputs, selects, and textareas have high-contrast, professional text color */
+input, select, textarea {
+  color: var(--text-primary) !important;
+}
+
+/* Clearer placeholders */
+input::placeholder, textarea::placeholder {
+  color: var(--text-secondary-light) !important;
+  opacity: 0.85;
+}
+
+/* Custom text selection styling for inputs to feel premium */
+input::selection, textarea::selection {
+  background-color: var(--accent-primary);
+  color: #ffffff;
+}
+
