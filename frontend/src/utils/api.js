@@ -87,7 +87,8 @@ const initLocalStorageDB = () => {
         trustScore: 98,
         warningsCount: 0,
         inventoryUpdateFrequency: 'Real-time Integrator',
-        priceAccuracy: 100
+        priceAccuracy: 100,
+        isLaunched: true
       },
       {
         _id: 'p2',
@@ -106,7 +107,8 @@ const initLocalStorageDB = () => {
         trustScore: 100,
         warningsCount: 0,
         inventoryUpdateFrequency: 'Never',
-        priceAccuracy: 100
+        priceAccuracy: 100,
+        isLaunched: false
       }
     ]));
   }
@@ -300,6 +302,19 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     return pharmacies[idx];
   }
 
+  if (endpoint === '/pharmacies/launch' && method === 'POST') {
+    const user = getLoggedInUser();
+    const idx = pharmacies.findIndex(p => p.ownerId === (user?._id || user?.id));
+    if (idx === -1) throw new Error('Store not found');
+    if (pharmacies[idx].status !== 'Approved & Verified') {
+      throw new Error('Only approved and verified stores can be launched.');
+    }
+    pharmacies[idx].isLaunched = true;
+    saveDB('medsafe_pharmacies', pharmacies);
+    logLocalAudit('STORE_LAUNCHED', `Store launched live: ${pharmacies[idx].name}`);
+    return pharmacies[idx];
+  }
+
   if (endpoint.startsWith('/pharmacies/inventory')) {
     if (endpoint.includes('sync-billing')) {
       const { pharmacyId, billingSystem } = body;
@@ -360,6 +375,10 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     return inventory.filter(i => i.pharmacyId === pharmacyId);
   }
 
+  if (endpoint === '/medicines') {
+    return medicines;
+  }
+
   // Admin Router
   if (endpoint === '/admin/pharmacies') {
     return pharmacies;
@@ -408,17 +427,19 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
   // Executive Router
   if (endpoint === '/executive/assignments') {
     const user = getLoggedInUser();
-    return pharmacies.filter(p => p.assignedExecutiveId === user?._id || p.status === 'Verification In Progress');
+    const userId = user?._id || user?.id;
+    return pharmacies.filter(p => p.assignedExecutiveId === userId || p.status === 'Verification In Progress');
   }
 
   if (endpoint === '/executive/submit-report' && method === 'POST') {
     const { pharmacyId, recommendation, complianceNotes } = body;
     const user = getLoggedInUser();
+    const userId = user?._id || user?.id;
     
     const newReport = {
       _id: 'rep_' + Date.now(),
       pharmacyId,
-      executiveId: user?._id || 'mock_exec',
+      executiveId: userId || 'mock_exec',
       executiveName: user?.name || 'Vikram',
       recommendation,
       complianceNotes,
@@ -442,7 +463,7 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     const urlParams = new URLSearchParams(endpoint.split('?')[1]);
     const query = urlParams.get('query') || '';
     
-    const activeStores = pharmacies.filter(p => p.status === 'Approved & Verified');
+    const activeStores = pharmacies.filter(p => p.status === 'Approved & Verified' && p.isLaunched);
     const storeIds = activeStores.map(s => s._id);
 
     const matchedMeds = medicines.filter(m => 

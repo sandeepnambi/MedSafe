@@ -48,12 +48,16 @@ const PharmacySchema = new Schema({
   storeTimings: { type: String },
   barcodeSystemAvailable: { type: Boolean, default: false },
   billingSoftwareAvailable: { type: Boolean, default: false },
+  debitCreditAvailable: { type: Boolean, default: false },
   setupAssistanceRequirements: { type: String },
+  adminComments: { type: String, default: '' },
   
   // Executive assignment
   assignedExecutiveId: { type: String, default: null },
   assignedExecutiveName: { type: String, default: null },
   visitScheduleDate: { type: String, default: null },
+
+  isLaunched: { type: Boolean, default: false },
 
   // Trust System
   trustScore: { type: Number, default: 100 },

@@ -25,9 +25,9 @@ app.use(express.json());
 const authenticateToken = (req, res, next) => {
   const authHeader = req.headers['authorization'];
   const token = authHeader && authHeader.split(' ')[1];
-  
+
   if (!token) return res.status(401).json({ message: 'Access Token Required' });
-  
+
   jwt.verify(token, JWT_SECRET, (err, user) => {
     if (err) return res.status(403).json({ message: 'Invalid or Expired Token' });
     req.user = user;
@@ -68,25 +68,25 @@ app.post('/api/auth/register', async (req, res) => {
   try {
     const { name, email, password, role } = req.body;
     const User = getModel('User');
-    
+
     // Check if user exists
     const existing = await User.findOne({ email });
     if (existing) {
       return res.status(400).json({ message: 'User with this email already exists' });
     }
-    
+
     // Hash password
     const hashedPassword = await bcrypt.hash(password, 10);
-    
+
     const newUser = await User.create({
       name,
       email,
       password: hashedPassword,
       role: role || 'customer'
     });
-    
+
     await logAuditAction(newUser._id, newUser.name, newUser.role, 'USER_REGISTERED', newUser._id, `New ${newUser.role} registered: ${newUser.email}`);
-    
+
     res.status(201).json({ message: 'User registered successfully!', userId: newUser._id });
   } catch (error) {
     res.status(500).json({ message: 'Registration failed', error: error.message });
@@ -97,23 +97,23 @@ app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
     const User = getModel('User');
-    
+
     const user = await User.findOne({ email });
     if (!user) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
-    
+
     const isMatch = await bcrypt.compare(password, user.password);
     if (!isMatch) {
       return res.status(400).json({ message: 'Invalid credentials' });
     }
-    
+
     const token = jwt.sign(
       { id: user._id, name: user.name, email: user.email, role: user.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     res.json({
       token,
       user: { id: user._id, name: user.name, email: user.email, role: user.role }
@@ -138,13 +138,13 @@ app.post('/api/auth/profile/update', authenticateToken, async (req, res) => {
   try {
     const { name, email, password } = req.body;
     const User = getModel('User');
-    
+
     // Find active user
     const userObj = await User.findById(req.user.id);
     if (!userObj) {
       return res.status(404).json({ message: 'User not found' });
     }
-    
+
     // Check if new email is already taken by another user
     if (email && email !== userObj.email) {
       const existing = await User.findOne({ email });
@@ -153,25 +153,25 @@ app.post('/api/auth/profile/update', authenticateToken, async (req, res) => {
       }
       userObj.email = email;
     }
-    
+
     if (name) {
       userObj.name = name;
     }
-    
+
     if (password) {
       const hashedPassword = await bcrypt.hash(password, 10);
       userObj.password = hashedPassword;
     }
-    
+
     await userObj.save();
-    
+
     // Generate a fresh JWT with updated info
     const token = jwt.sign(
       { id: userObj._id, name: userObj.name, email: userObj.email, role: userObj.role },
       JWT_SECRET,
       { expiresIn: '24h' }
     );
-    
+
     await logAuditAction(
       userObj._id,
       userObj.name,
@@ -180,7 +180,7 @@ app.post('/api/auth/profile/update', authenticateToken, async (req, res) => {
       userObj._id,
       `User profile updated: ${userObj.email}`
     );
-    
+
     res.status(200).json({
       message: 'Profile updated successfully!',
       user: {
@@ -203,13 +203,13 @@ app.post('/api/pharmacies', authenticateToken, requireRole(['pharmacy']), async 
   try {
     const { name, ownerName, address, contact, drugLicense, gstNumber, billingSoftware, storeTimings } = req.body;
     const Pharmacy = getModel('Pharmacy');
-    
+
     // Check if store already registered for this owner
     const existing = await Pharmacy.findOne({ ownerId: req.user.id });
     if (existing) {
       return res.status(400).json({ message: 'You have already registered a pharmacy profile' });
     }
-    
+
     const newPharmacy = await Pharmacy.create({
       name,
       ownerName,
@@ -225,9 +225,9 @@ app.post('/api/pharmacies', authenticateToken, requireRole(['pharmacy']), async 
       storeTimings: storeTimings || '9 AM - 9 PM',
       trustScore: 100
     });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'PHARMACY_REGISTERED', newPharmacy._id, `Pharmacy registered: ${newPharmacy.name}`);
-    
+
     res.status(201).json(newPharmacy);
   } catch (error) {
     res.status(500).json({ message: 'Pharmacy profile creation failed', error: error.message });
@@ -245,15 +245,43 @@ app.get('/api/pharmacies/my-store', authenticateToken, requireRole(['pharmacy'])
   }
 });
 
+app.get('/api/medicines', authenticateToken, async (req, res) => {
+  try {
+    const Medicine = getModel('Medicine');
+    const list = await Medicine.find({});
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch medicines', error: error.message });
+  }
+});
+
+app.post('/api/pharmacies/launch', authenticateToken, requireRole(['pharmacy']), async (req, res) => {
+  try {
+    const Pharmacy = getModel('Pharmacy');
+    const store = await Pharmacy.findOne({ ownerId: req.user.id });
+    if (!store) return res.status(404).json({ message: 'Store not found.' });
+    if (store.status !== 'Approved & Verified') {
+      return res.status(400).json({ message: 'Only approved and verified stores can be launched.' });
+    }
+    store.isLaunched = true;
+    await store.save();
+
+    await logAuditAction(req.user.id, req.user.name, req.user.role, 'STORE_LAUNCHED', store._id, `Store launched live: ${store.name}`);
+    res.json(store);
+  } catch (error) {
+    res.status(500).json({ message: 'Launch failed', error: error.message });
+  }
+});
+
 // Request Onboarding Setup visit (Step 2 Onboarding)
 app.post('/api/pharmacies/request-verification', authenticateToken, requireRole(['pharmacy']), async (req, res) => {
   try {
     const { preferredVisitDate, storeTimings, barcodeSystemAvailable, billingSoftwareAvailable, setupAssistanceRequirements } = req.body;
     const Pharmacy = getModel('Pharmacy');
-    
+
     const store = await Pharmacy.findOne({ ownerId: req.user.id });
     if (!store) return res.status(404).json({ message: 'Pharmacy profile not found. Register first.' });
-    
+
     const updated = await Pharmacy.findByIdAndUpdate(store._id, {
       $set: {
         status: 'Verification Requested',
@@ -264,9 +292,9 @@ app.post('/api/pharmacies/request-verification', authenticateToken, requireRole(
         setupAssistanceRequirements: setupAssistanceRequirements || 'None'
       }
     }, { new: true });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'VERIFICATION_REQUESTED', store._id, `Requested executive setup for: ${store.name}`);
-    
+
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: 'Verification request failed', error: error.message });
@@ -292,7 +320,7 @@ app.post('/api/pharmacies/inventory/manage', authenticateToken, requireRole(['ph
   try {
     const { pharmacyId, medicineId, medicineName, price, stock, isAvailable } = req.body;
     const Inventory = getModel('Inventory');
-    
+
     // Validate that the request matches ownership
     if (req.user.role === 'pharmacy') {
       const Pharmacy = getModel('Pharmacy');
@@ -301,10 +329,13 @@ app.post('/api/pharmacies/inventory/manage', authenticateToken, requireRole(['ph
         return res.status(403).json({ message: 'Forbidden: You do not own this pharmacy' });
       }
     }
-    
+
     // Check if item already exists in this pharmacy inventory
-    const existing = await Inventory.findOne({ pharmacyId, medicineId });
-    
+    const existing = await Inventory.findOne({
+      pharmacyId: String(pharmacyId),
+      medicineId: String(medicineId)
+    });
+
     let result;
     if (existing) {
       result = await Inventory.findByIdAndUpdate(existing._id, {
@@ -312,21 +343,21 @@ app.post('/api/pharmacies/inventory/manage', authenticateToken, requireRole(['ph
       }, { new: true });
     } else {
       result = await Inventory.create({
-        pharmacyId,
-        medicineId,
+        pharmacyId: String(pharmacyId),
+        medicineId: String(medicineId),
         medicineName,
         price: Number(price),
         stock: Number(stock),
         isAvailable: isAvailable !== undefined ? !!isAvailable : true
       });
     }
-    
+
     // Update inventory update timestamp on the pharmacy to dynamically raise trust scores
     const Pharmacy = getModel('Pharmacy');
     await Pharmacy.findByIdAndUpdate(pharmacyId, {
       $set: { inventoryUpdateFrequency: 'Daily' }
     });
-    
+
     res.json(result);
   } catch (error) {
     res.status(500).json({ message: 'Inventory update failed', error: error.message });
@@ -340,20 +371,23 @@ app.post('/api/pharmacies/inventory/sync-billing', authenticateToken, requireRol
     const Pharmacy = getModel('Pharmacy');
     const Inventory = getModel('Inventory');
     const Medicine = getModel('Medicine');
-    
+
     const store = await Pharmacy.findById(pharmacyId);
     if (!store) return res.status(404).json({ message: 'Pharmacy not found' });
-    
+
     // Fetch all global medicines to populate mock stock
     const medicinesList = await Medicine.find({});
-    
+
     // Bulk create/update mock syncing from Excel/XML billing file
     const syncedItems = [];
     for (const med of medicinesList) {
       const randomStock = Math.floor(Math.random() * 80) + 10;
       const basePrice = Math.floor(Math.random() * 100) + 20;
-      
-      const existing = await Inventory.findOne({ pharmacyId, medicineId: med._id });
+
+      const existing = await Inventory.findOne({
+        pharmacyId: String(pharmacyId),
+        medicineId: String(med._id)
+      });
       let item;
       if (existing) {
         item = await Inventory.findByIdAndUpdate(existing._id, {
@@ -361,8 +395,8 @@ app.post('/api/pharmacies/inventory/sync-billing', authenticateToken, requireRol
         });
       } else {
         item = await Inventory.create({
-          pharmacyId,
-          medicineId: med._id,
+          pharmacyId: String(pharmacyId),
+          medicineId: String(med._id),
           medicineName: med.name,
           price: basePrice,
           stock: randomStock,
@@ -371,16 +405,16 @@ app.post('/api/pharmacies/inventory/sync-billing', authenticateToken, requireRol
       }
       syncedItems.push(item);
     }
-    
+
     await Pharmacy.findByIdAndUpdate(pharmacyId, {
-      $set: { 
+      $set: {
         inventoryUpdateFrequency: 'Real-time Integrator',
         billingSoftware: billingSystem || 'MedSafe-Link v2'
       }
     });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'BILLING_SOFTWARE_SYNCED', pharmacyId, `Real-time billing software synced: ${billingSystem}`);
-    
+
     res.json({ message: 'Successfully synced billing system!', count: syncedItems.length });
   } catch (error) {
     res.status(500).json({ message: 'Billing software sync failed', error: error.message });
@@ -406,13 +440,13 @@ app.get('/api/executive/assignments', authenticateToken, requireRole(['executive
 app.post('/api/executive/submit-report', authenticateToken, requireRole(['executive']), async (req, res) => {
   try {
     const { pharmacyId, certificationStatus, medicineQualityStatus, inventorySetupStatus, complianceNotes, riskFlags, recommendation } = req.body;
-    
+
     const Pharmacy = getModel('Pharmacy');
     const VerificationReport = getModel('VerificationReport');
-    
+
     const store = await Pharmacy.findById(pharmacyId);
     if (!store) return res.status(404).json({ message: 'Pharmacy not found' });
-    
+
     // Create detailed verification report
     const newReport = await VerificationReport.create({
       pharmacyId,
@@ -426,14 +460,14 @@ app.post('/api/executive/submit-report', authenticateToken, requireRole(['execut
       images: ['https://images.unsplash.com/photo-1576091160550-2173dba999ef?auto=format&fit=crop&w=800&q=80'],
       recommendation: recommendation || 'Approved'
     });
-    
+
     // Update Pharmacy status to Under Admin Review
     const updatedPharmacy = await Pharmacy.findByIdAndUpdate(pharmacyId, {
       $set: { status: 'Under Admin Review' }
     }, { new: true });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'REPORT_SUBMITTED', pharmacyId, `Physical inspection report submitted: Recommendation: ${recommendation}`);
-    
+
     res.status(201).json({ report: newReport, pharmacy: updatedPharmacy });
   } catch (error) {
     res.status(500).json({ message: 'Report submission failed', error: error.message });
@@ -453,18 +487,29 @@ app.get('/api/admin/pharmacies', authenticateToken, requireRole(['admin']), asyn
   }
 });
 
+// List all verification executives/inspectors
+app.get('/api/admin/executives', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const User = getModel('User');
+    const list = await User.find({ role: 'executive' }, '_id name email');
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch executives', error: error.message });
+  }
+});
+
 // Assign Verification Executive (Step 3 Onboarding)
 app.post('/api/admin/assign-executive', authenticateToken, requireRole(['admin']), async (req, res) => {
   try {
     const { pharmacyId, executiveId, visitDate } = req.body;
     const Pharmacy = getModel('Pharmacy');
     const User = getModel('User');
-    
+
     const execUser = await User.findById(executiveId);
     if (!execUser || execUser.role !== 'executive') {
       return res.status(400).json({ message: 'Valid Verification Executive account required' });
     }
-    
+
     const updated = await Pharmacy.findByIdAndUpdate(pharmacyId, {
       $set: {
         status: 'Executive Assigned',
@@ -473,9 +518,9 @@ app.post('/api/admin/assign-executive', authenticateToken, requireRole(['admin']
         visitScheduleDate: visitDate || new Date().toISOString().split('T')[0]
       }
     }, { new: true });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'EXECUTIVE_ASSIGNED', pharmacyId, `Assigned Verification Executive ${execUser.name} to visit on ${visitDate}`);
-    
+
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: 'Assignment failed', error: error.message });
@@ -487,22 +532,23 @@ app.post('/api/admin/approve-pharmacy', authenticateToken, requireRole(['admin']
   try {
     const { pharmacyId, decision, comments } = req.body; // decision: 'approve', 'correct', 'reject'
     const Pharmacy = getModel('Pharmacy');
-    
+
     let targetStatus;
     if (decision === 'approve') targetStatus = 'Approved & Verified';
     else if (decision === 'correct') targetStatus = 'Needs Corrections';
     else targetStatus = 'Rejected';
-    
+
     const updated = await Pharmacy.findByIdAndUpdate(pharmacyId, {
-      $set: { 
+      $set: {
         status: targetStatus,
+        adminComments: comments || 'None',
         // Start trust score high on approval
         trustScore: decision === 'approve' ? 100 : 50
       }
     }, { new: true });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'PHARMACY_STATUS_DECISION', pharmacyId, `Pharmacy ${updated.name} decision: ${targetStatus}. Comments: ${comments || 'None'}`);
-    
+
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: 'Approval review process failed', error: error.message });
@@ -549,20 +595,20 @@ app.post('/api/admin/complaints/adjudicate', authenticateToken, requireRole(['ad
     const { complaintId, action } = req.body; // action: 'penalize', 'dismiss'
     const Complaint = getModel('Complaint');
     const Pharmacy = getModel('Pharmacy');
-    
+
     const complaint = await Complaint.findById(complaintId);
     if (!complaint) return res.status(404).json({ message: 'Complaint not found' });
-    
+
     if (action === 'penalize') {
       const store = await Pharmacy.findById(complaint.pharmacyId);
       if (!store) return res.status(404).json({ message: 'Associated pharmacy not found' });
-      
+
       const newWarningsCount = (store.warningsCount || 0) + 1;
       let newTrustScore = store.trustScore - 20; // Reduce trust score by 20 points
       if (newTrustScore < 0) newTrustScore = 0;
-      
+
       let nextStatus = store.status;
-      
+
       // Strict Fraud Policy Workflow:
       // 1st warning -> Issue warning warning alert
       // 2nd warning -> Trust rating penalty drop
@@ -570,28 +616,28 @@ app.post('/api/admin/complaints/adjudicate', authenticateToken, requireRole(['ad
       if (newWarningsCount >= 3) {
         nextStatus = 'Suspended';
       }
-      
+
       const updatedStore = await Pharmacy.findByIdAndUpdate(complaint.pharmacyId, {
-        $set: { 
+        $set: {
           warningsCount: newWarningsCount,
           trustScore: newTrustScore,
           status: nextStatus
         }
       }, { new: true });
-      
+
       await Complaint.findByIdAndUpdate(complaintId, {
         $set: { status: 'Resolved', penaltyApplied: true }
       });
-      
+
       await logAuditAction(req.user.id, req.user.name, req.user.role, 'FRAUD_PENALTY_APPLIED', store._id, `Complaint penalized. Warning #${newWarningsCount} issued. Trust Score drops to ${newTrustScore}. Pharmacy Status: ${nextStatus}`);
-      
+
       return res.json({ message: 'Pharmacy penalized successfully', pharmacy: updatedStore });
     } else {
       // Dismiss complaint
       await Complaint.findByIdAndUpdate(complaintId, { $set: { status: 'Dismissed' } });
-      
+
       await logAuditAction(req.user.id, req.user.name, req.user.role, 'COMPLAINT_DISMISSED', complaint.pharmacyId, `Complaint dismissed by Admin`);
-      
+
       return res.json({ message: 'Complaint dismissed successfully' });
     }
   } catch (error) {
@@ -604,11 +650,11 @@ app.post('/api/pharmacies/respond-complaint', authenticateToken, requireRole(['p
   try {
     const { complaintId, response } = req.body;
     const Complaint = getModel('Complaint');
-    
+
     const updated = await Complaint.findByIdAndUpdate(complaintId, {
       $set: { responseFromPharmacy: response }
     }, { new: true });
-    
+
     res.json(updated);
   } catch (error) {
     res.status(500).json({ message: 'Failed to submit response', error: error.message });
@@ -624,11 +670,11 @@ app.get('/api/customer/search', async (req, res) => {
     const Pharmacy = getModel('Pharmacy');
     const Inventory = getModel('Inventory');
     const Medicine = getModel('Medicine');
-    
-    // Only search within verified pharmacies
-    const verifiedStores = await Pharmacy.find({ status: 'Approved & Verified' });
+
+    // Only search within verified and launched pharmacies
+    const verifiedStores = await Pharmacy.find({ status: 'Approved & Verified', isLaunched: true });
     const verifiedStoreIds = verifiedStores.map(store => store._id);
-    
+
     // Find matching medicines (name, generic name, salt composition)
     let medicineQuery = {};
     if (query) {
@@ -641,22 +687,22 @@ app.get('/api/customer/search', async (req, res) => {
         ]
       };
     }
-    
+
     const matchedMeds = await Medicine.find(medicineQuery);
     const matchedMedIds = matchedMeds.map(med => med._id);
-    
+
     // Fetch matching stock listings inside verified pharmacies
     const inventoryListings = await Inventory.find({
       pharmacyId: { $in: verifiedStoreIds },
       medicineId: { $in: matchedMedIds },
       isAvailable: true
     });
-    
+
     // Compile comparisons
     const results = inventoryListings.map(listing => {
       const store = verifiedStores.find(s => s._id.toString() === listing.pharmacyId.toString());
       const med = matchedMeds.find(m => m._id.toString() === listing.medicineId.toString());
-      
+
       return {
         _id: listing._id,
         price: listing.price,
@@ -673,10 +719,10 @@ app.get('/api/customer/search', async (req, res) => {
         }
       };
     });
-    
+
     // Order by price ascending
     results.sort((a, b) => a.price - b.price);
-    
+
     res.json(results);
   } catch (error) {
     res.status(500).json({ message: 'Search failed', error: error.message });
@@ -688,16 +734,16 @@ app.get('/api/customer/recommendations', async (req, res) => {
   try {
     const { query } = req.query;
     const Medicine = getModel('Medicine');
-    
+
     const match = await Medicine.findOne({ name: { $regex: query || 'Paracetamol', $options: 'i' } });
     if (!match) return res.json({ alternatives: [], demandForecast: 'Stable' });
-    
+
     // Fetch other generic medicines in same category
     const alternatives = await Medicine.find({
       category: match.category,
       _id: { $ne: match._id }
     });
-    
+
     // Smart Analytics Demand prediction
     const seasons = {
       Painkiller: 'Elevated during sports seasons, stable baseline.',
@@ -706,7 +752,7 @@ app.get('/api/customer/recommendations', async (req, res) => {
       Statin: 'Chronic cardiovascular - high demand curve.',
       Antihistamine: 'Spikes strongly during spring allergy months.'
     };
-    
+
     res.json({
       targetMedicine: match,
       alternatives,
@@ -725,19 +771,19 @@ app.post('/api/customer/lodge-complaint', authenticateToken, requireRole(['custo
     const Pharmacy = getModel('Pharmacy');
     const Complaint = getModel('Complaint');
     const Inventory = getModel('Inventory');
-    
+
     const store = await Pharmacy.findById(pharmacyId);
     if (!store) return res.status(404).json({ message: 'Pharmacy not found' });
-    
+
     // Simulated Google Cloud Vision OCR Processing
     let ocrPriceAlert = false;
     let priceMismatchDetails = '';
-    
+
     if (type === 'Price Mismatch' && mockInvoiceText) {
       // Find numbers in simulated receipt
       const match = mockInvoiceText.match(/price[:\s]*(\d+)/i);
       const parsedPrice = match ? Number(match[1]) : 0;
-      
+
       // Fetch inventory price
       const listings = await Inventory.find({ pharmacyId });
       if (listings.length > 0 && parsedPrice > 0) {
@@ -749,7 +795,7 @@ app.post('/api/customer/lodge-complaint', authenticateToken, requireRole(['custo
         }
       }
     }
-    
+
     const complaint = await Complaint.create({
       pharmacyId,
       pharmacyName: store.name,
@@ -760,9 +806,9 @@ app.post('/api/customer/lodge-complaint', authenticateToken, requireRole(['custo
       billImage: 'https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?auto=format&fit=crop&w=400&q=80',
       status: 'Pending'
     });
-    
+
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'COMPLAINT_LODGED', pharmacyId, `Complaint lodged (${type}). OCR Flagged: ${ocrPriceAlert}`);
-    
+
     res.status(201).json({ complaint, ocrPriceAlert });
   } catch (error) {
     res.status(500).json({ message: 'Complaint logging failed', error: error.message });
@@ -808,15 +854,44 @@ const seedDatabase = async () => {
   const Inventory = getModel('Inventory');
   const Complaint = getModel('Complaint');
   const AuditLog = getModel('AuditLog');
-  
-  // Clear collections for absolute fresh experience
+
+  // Clear collections for fresh seeding
   await User.deleteMany({});
   await Medicine.deleteMany({});
   await Pharmacy.deleteMany({});
   await Inventory.deleteMany({});
   await Complaint.deleteMany({});
   await AuditLog.deleteMany({});
-  
+
+  // Create user accounts
+  const p123456 = await bcrypt.hash('123456', 10);
+  const pDefault = await bcrypt.hash('password123', 10);
+
+  // Seed gmail.com users
+  const custGmail = await User.create({ name: 'Gmail Customer', email: 'customer@gmail.com', password: p123456, role: 'customer' });
+  const adminGmail = await User.create({ name: 'Gmail Admin', email: 'admin@gmail.com', password: p123456, role: 'admin' });
+  const execGmail = await User.create({ name: 'Inspector Dan', email: 'executive@gmail.com', password: p123456, role: 'executive' });
+
+  // Seed store owner accounts with gmail.com (all password: 123456, role: pharmacy)
+  const ownerSunil = await User.create({ name: 'Sunil Mehta', email: 'sunil@gmail.com', password: p123456, role: 'pharmacy' });
+  const ownerRajesh = await User.create({ name: 'Rajesh Sharma', email: 'rajesh@gmail.com', password: p123456, role: 'pharmacy' });
+  const ownerAnil = await User.create({ name: 'Anil Deshmukh', email: 'anil@gmail.com', password: p123456, role: 'pharmacy' });
+  const ownerAster = await User.create({ name: 'Sunil Mehta (Aster)', email: 'aster@gmail.com', password: p123456, role: 'pharmacy' });
+  const ownerGuardian = await User.create({ name: 'Devin Patel (Guardian)', email: 'guardian@gmail.com', password: p123456, role: 'pharmacy' });
+  const pharmacyGmail = await User.create({ name: 'Devin Patel (LifeCare)', email: 'pharmacy@gmail.com', password: p123456, role: 'pharmacy' });
+  const ownerMetro = await User.create({ name: 'Rajesh Sharma (Metro)', email: 'metro@gmail.com', password: p123456, role: 'pharmacy' });
+
+  // Seed medsafe.com users (for fast switch buttons in UI) and more inspectors
+  const custMed = await User.create({ name: 'Rahul Sharma', email: 'customer@medsafe.com', password: pDefault, role: 'customer' });
+  const adminMed = await User.create({ name: 'SuperAdmin', email: 'admin@medsafe.com', password: pDefault, role: 'admin' });
+  const execMed = await User.create({ name: 'Inspector Vikram', email: 'executive@medsafe.com', password: pDefault, role: 'executive' });
+  const pharmacyMed = await User.create({ name: 'Devin Patel', email: 'pharmacy@medsafe.com', password: pDefault, role: 'pharmacy' });
+
+  // Additional verification executives/inspectors (total of 5)
+  await User.create({ name: 'Inspector Rohan', email: 'inspector.rohan@medsafe.com', password: pDefault, role: 'executive' });
+  await User.create({ name: 'Inspector Priya', email: 'inspector.priya@medsafe.com', password: pDefault, role: 'executive' });
+  await User.create({ name: 'Inspector Amit', email: 'inspector.amit@medsafe.com', password: pDefault, role: 'executive' });
+
   // Seed essential medicines
   const meds = [
     {
@@ -910,18 +985,18 @@ const seedDatabase = async () => {
       alternatives: ['Lorasyn 10', 'Alavert 10', 'Lupilor 10']
     }
   ];
-  
+
   const createdMeds = [];
   for (const m of meds) {
     const created = await Medicine.create(m);
     createdMeds.push(created);
   }
-  
+
   // Seed verified pharmacy 1
-  const verifiedStore = await Pharmacy.create({
+  const store1 = await Pharmacy.create({
     name: 'Wellness Forever Pharmacy',
     ownerName: 'Sunil Mehta',
-    ownerId: 'mock_sunil_mehta',
+    ownerId: String(ownerSunil._id),
     address: 'Shop 12, Highstreet Mall, MG Road, Pune',
     contact: '+91 9823456789',
     drugLicense: 'DL-2035-MH2049',
@@ -934,16 +1009,19 @@ const seedDatabase = async () => {
     storeTimings: '8 AM - 11 PM',
     barcodeSystemAvailable: true,
     billingSoftwareAvailable: true,
+    debitCreditAvailable: true,
+    assignedExecutiveId: String(execMed._id),
     assignedExecutiveName: 'Inspector Vikram',
     trustScore: 98,
-    inventoryUpdateFrequency: 'Real-time Integrator'
+    inventoryUpdateFrequency: 'Real-time Integrator',
+    isLaunched: true
   });
-  
+
   // Seed verified pharmacy 2
-  const apolloStore = await Pharmacy.create({
+  const store2 = await Pharmacy.create({
     name: 'Apollo Pharmacy Prime',
     ownerName: 'Rajesh Sharma',
-    ownerId: 'mock_rajesh_sharma',
+    ownerId: String(ownerRajesh._id),
     address: 'Shop 4, Gold Plaza, Main Street, Pune',
     contact: '+91 9765432100',
     drugLicense: 'DL-4021-MH2051',
@@ -956,16 +1034,19 @@ const seedDatabase = async () => {
     storeTimings: '24 Hours Open',
     barcodeSystemAvailable: true,
     billingSoftwareAvailable: true,
+    debitCreditAvailable: true,
+    assignedExecutiveId: String(execMed._id),
     assignedExecutiveName: 'Inspector Vikram',
     trustScore: 95,
-    inventoryUpdateFrequency: 'Real-time Integrator'
+    inventoryUpdateFrequency: 'Real-time Integrator',
+    isLaunched: true
   });
 
   // Seed verified pharmacy 3
-  const medplusStore = await Pharmacy.create({
+  const store3 = await Pharmacy.create({
     name: 'MedPlus SuperChemists',
     ownerName: 'Anil Deshmukh',
-    ownerId: 'mock_anil_deshmukh',
+    ownerId: String(ownerAnil._id),
     address: 'Sector 5, Kasturba Gandhi Road, Pune',
     contact: '+91 9123456780',
     drugLicense: 'DL-5032-MH2055',
@@ -978,16 +1059,19 @@ const seedDatabase = async () => {
     storeTimings: '9 AM - 10 PM',
     barcodeSystemAvailable: true,
     billingSoftwareAvailable: true,
+    debitCreditAvailable: true,
+    assignedExecutiveId: String(execMed._id),
     assignedExecutiveName: 'Inspector Vikram',
     trustScore: 92,
-    inventoryUpdateFrequency: 'Daily'
+    inventoryUpdateFrequency: 'Daily',
+    isLaunched: true
   });
 
   // Seed verified pharmacy 4
-  const asterStore = await Pharmacy.create({
+  const store4 = await Pharmacy.create({
     name: 'Aster Pharmacy',
     ownerName: 'Sunil Mehta',
-    ownerId: 'mock_sunil_mehta_aster',
+    ownerId: String(ownerAster._id),
     address: 'Shop 8, Hiranandani Estate, Thane, Mumbai',
     contact: '+91 8888777766',
     drugLicense: 'DL-6028-MH3050',
@@ -1000,16 +1084,19 @@ const seedDatabase = async () => {
     storeTimings: '8 AM - 10 PM',
     barcodeSystemAvailable: true,
     billingSoftwareAvailable: true,
+    debitCreditAvailable: true,
+    assignedExecutiveId: String(execMed._id),
     assignedExecutiveName: 'Inspector Vikram',
     trustScore: 96,
-    inventoryUpdateFrequency: 'Real-time Integrator'
+    inventoryUpdateFrequency: 'Real-time Integrator',
+    isLaunched: true
   });
 
   // Seed verified pharmacy 5
-  const guardianStore = await Pharmacy.create({
+  const store5 = await Pharmacy.create({
     name: 'Guardian Healthcare',
     ownerName: 'Devin Patel',
-    ownerId: 'mock_devin_patel_guardian',
+    ownerId: String(ownerGuardian._id),
     address: 'Block B, Niti Marg, Chanakyapuri, New Delhi',
     contact: '+91 7777666655',
     drugLicense: 'DL-7039-MH3060',
@@ -1022,76 +1109,44 @@ const seedDatabase = async () => {
     storeTimings: '9 AM - 9 PM',
     barcodeSystemAvailable: true,
     billingSoftwareAvailable: true,
+    debitCreditAvailable: true,
+    assignedExecutiveId: String(execMed._id),
     assignedExecutiveName: 'Inspector Vikram',
     trustScore: 94,
-    inventoryUpdateFrequency: 'Daily'
+    inventoryUpdateFrequency: 'Daily',
+    isLaunched: true
   });
-  
-  // Seed verified pharmacy inventories with competitive prices
-  // Indexes: Paracetamol (0), Amoxicillin (1), Metformin (2), Atorvastatin (3), Cetirizine (4), Ibuprofen (5), Pantoprazole (6), Azithromycin (7), Montelukast (8), Loratadine (9)
-  const wellnessPrices = [15, 45, 12, 55, 8, 10, 18, 30, 22, 14];
-  const apolloPrices =   [13, 48, 10, 58, 9, 8, 20, 28, 24, 12];
-  const medplusPrices =  [16, 42, 14, 52, 7, 11, 17, 32, 20, 15];
-  const asterPrices =    [14, 46, 11, 56, 8, 9, 19, 29, 21, 13];
-  const guardianPrices = [15, 44, 13, 54, 8, 10, 18, 31, 23, 14];
-  
-  for (let i = 0; i < createdMeds.length; i++) {
-    // Wellness Forever stock
-    await Inventory.create({
-      pharmacyId: verifiedStore._id,
-      medicineId: createdMeds[i]._id,
-      medicineName: createdMeds[i].name,
-      price: wellnessPrices[i] || 15,
-      stock: Math.floor(Math.random() * 50) + 30,
-      isAvailable: true
-    });
-    
-    // Apollo Pharmacy stock
-    await Inventory.create({
-      pharmacyId: apolloStore._id,
-      medicineId: createdMeds[i]._id,
-      medicineName: createdMeds[i].name,
-      price: apolloPrices[i] || 15,
-      stock: Math.floor(Math.random() * 50) + 30,
-      isAvailable: true
-    });
-    
-    // MedPlus stock
-    await Inventory.create({
-      pharmacyId: medplusStore._id,
-      medicineId: createdMeds[i]._id,
-      medicineName: createdMeds[i].name,
-      price: medplusPrices[i] || 15,
-      stock: Math.floor(Math.random() * 50) + 30,
-      isAvailable: true
-    });
 
-    // Aster Pharmacy stock
-    await Inventory.create({
-      pharmacyId: asterStore._id,
-      medicineId: createdMeds[i]._id,
-      medicineName: createdMeds[i].name,
-      price: asterPrices[i] || 15,
-      stock: Math.floor(Math.random() * 50) + 30,
-      isAvailable: true
-    });
+  // Seed inventories for verified pharmacies (1 to 5)
+  const storeList = [store1, store2, store3, store4, store5];
+  const priceSets = [
+    [15, 45, 12, 55, 8, 10, 18, 30, 22, 14],
+    [13, 48, 10, 58, 9, 8, 20, 28, 24, 12],
+    [16, 42, 14, 52, 7, 11, 17, 32, 20, 15],
+    [14, 46, 11, 56, 8, 9, 19, 29, 21, 13],
+    [15, 44, 13, 54, 8, 10, 18, 31, 23, 14]
+  ];
 
-    // Guardian Healthcare stock
-    await Inventory.create({
-      pharmacyId: guardianStore._id,
-      medicineId: createdMeds[i]._id,
-      medicineName: createdMeds[i].name,
-      price: guardianPrices[i] || 15,
-      stock: Math.floor(Math.random() * 50) + 30,
-      isAvailable: true
-    });
+  for (let sIdx = 0; sIdx < storeList.length; sIdx++) {
+    const store = storeList[sIdx];
+    const prices = priceSets[sIdx];
+    for (let i = 0; i < createdMeds.length; i++) {
+      await Inventory.create({
+        pharmacyId: String(store._id),
+        medicineId: String(createdMeds[i]._id),
+        medicineName: createdMeds[i].name,
+        price: prices[i] || 15,
+        stock: Math.floor(Math.random() * 50) + 30,
+        isAvailable: true
+      });
+    }
   }
-  
-  // Seed a pending pharmacy (the user will onboard this)
+
+  // Seed pharmacy 6 (Pending verification request, Devin Patel / pharmacyGmail._id)
   await Pharmacy.create({
     name: 'LifeCare Chemist & Druggist',
     ownerName: 'Devin Patel',
-    ownerId: 'mock_devin_patel',
+    ownerId: String(pharmacyGmail._id),
     address: 'Ground Floor, Tulip Plaza, Sector 4, Mumbai',
     contact: '+91 9998887776',
     drugLicense: 'DL-9041-MH3011',
@@ -1099,22 +1154,55 @@ const seedDatabase = async () => {
     certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
     storeImages: ['https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=800&q=80'],
     billingSoftware: 'None',
-    status: 'Verification Requested',
+    status: 'Pending Verification Request',
     preferredVisitDate: '2026-06-20',
     storeTimings: '9 AM - 10 PM',
     barcodeSystemAvailable: false,
     billingSoftwareAvailable: false,
+    debitCreditAvailable: false,
     setupAssistanceRequirements: 'Need guidance setting up automated inventory sync API.',
     trustScore: 100
   });
-  
+
+  // Seed pharmacy 7 (Verification Requested, Metro Medicos)
+  await Pharmacy.create({
+    name: 'Metro Medicos & Healthcare',
+    ownerName: 'Rajesh Sharma',
+    ownerId: String(ownerMetro._id),
+    address: 'Shop 2, Metro Station Plaza, Sector 15, Noida',
+    contact: '+91 9555443322',
+    drugLicense: 'DL-8032-UP3022',
+    gstNumber: '09AAAAA2222A2Z2',
+    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
+    storeImages: ['https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=80'],
+    billingSoftware: 'None',
+    status: 'Verification Requested',
+    preferredVisitDate: '2026-06-25',
+    storeTimings: '9 AM - 9 PM',
+    barcodeSystemAvailable: true,
+    billingSoftwareAvailable: false,
+    debitCreditAvailable: true,
+    setupAssistanceRequirements: 'Need support linking Marg POS system.',
+    trustScore: 100
+  });
+
   console.log('💚 Database Seeding Completed Successfully!');
 };
 
 // Initiate database connection
-connectDB().then(() => {
-  // Automatically seed on boot to give immediate visual context
-  seedDatabase().catch(err => console.error('Database Seeding Failed:', err));
+connectDB().then(async () => {
+  try {
+    const User = getModel('User');
+    const hasAmit = await User.findOne({ email: 'inspector.amit@medsafe.com' });
+    if (!hasAmit) {
+      console.log('Seed inspectors not found. Seeding initial database data...');
+      await seedDatabase();
+    } else {
+      console.log('Database already contains records. Skipping auto-seeding to protect data.');
+    }
+  } catch (err) {
+    console.error('Database count/seeding check failed:', err);
+  }
 });
 
 // Start Express Listener

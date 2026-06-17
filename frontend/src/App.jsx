@@ -4,7 +4,7 @@ import {
   Settings, Award, RefreshCw, Barcode, ClipboardList, CheckCircle2, 
   XCircle, Truck, TrendingUp, HelpCircle, User, Store, 
   Lock, Eye, Plus, Trash2, FileText, Check, AlertOctagon, RefreshCcw,
-  Heart, History
+  Heart, History, Radio
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar
@@ -159,6 +159,7 @@ export default function App() {
     storeTimings: '9 AM - 10 PM',
     barcodeSystemAvailable: true,
     billingSoftwareAvailable: true,
+    debitCreditAvailable: true,
     setupAssistanceRequirements: 'Need assistance setting up barcode scanner integration'
   });
   const [pharmacyInventory, setPharmacyInventory] = useState([]);
@@ -186,9 +187,11 @@ export default function App() {
   const [adminComplaints, setAdminComplaints] = useState([]);
   const [adminReports, setAdminReports] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
+  const [adminExecutives, setAdminExecutives] = useState([]);
   const [assigningStoreId, setAssigningStoreId] = useState('');
-  const [assigningExecId, setAssigningExecId] = useState('u3'); // default mock exec
+  const [assigningExecId, setAssigningExecId] = useState(''); // default empty
   const [assigningDate, setAssigningDate] = useState('2026-05-30');
+  const [showVerificationConfirmModal, setShowVerificationConfirmModal] = useState(false);
 
   // Simulated Mobile App States
   const [mobileScreen, setMobileScreen] = useState('home'); // home, search, barcode, scan_bill, checklist_step
@@ -209,20 +212,23 @@ export default function App() {
 
   // Initialize Data on Boot
   useEffect(() => {
-    syncServerStatus();
-    const saved = localStorage.getItem('medsafe_current_user');
-    if (saved) {
-      const user = JSON.parse(saved);
-      setCurrentUser(user);
-      setActiveRole(user.role);
-      if (user.role === 'customer') {
-        handleCustomerSearch('');
-        loadCustomerComplaints();
+    const init = async () => {
+      await syncServerStatus();
+      const saved = localStorage.getItem('medsafe_current_user');
+      if (saved) {
+        const user = JSON.parse(saved);
+        setCurrentUser(user);
+        setActiveRole(user.role);
+        if (user.role === 'customer') {
+          handleCustomerSearch('');
+          loadCustomerComplaints();
+        }
+        else if (user.role === 'pharmacy') loadPharmacyData();
+        else if (user.role === 'executive') loadExecutiveAssignments();
+        else if (user.role === 'admin') loadAdminData();
       }
-      else if (user.role === 'pharmacy') loadPharmacyData();
-      else if (user.role === 'executive') loadExecutiveAssignments();
-      else if (user.role === 'admin') loadAdminData();
-    }
+    };
+    init();
   }, []);
 
   const loadRoleUser = async (role) => {
@@ -511,11 +517,28 @@ export default function App() {
         setPharmacyInventory(inv || []);
         
         // Fetch all global medicines
-        const allMeds = JSON.parse(localStorage.getItem('medsafe_medicines') || '[]');
-        setAllMedicines(allMeds);
+        const allMeds = await api.get('/medicines');
+        setAllMedicines(allMeds || []);
       }
     } catch (err) {
-      setMyPharmacy(null);
+      console.error('loadPharmacyData failed:', err);
+      if (err.message && (err.message.includes('not found') || err.message.includes('Unauthorized') || err.message.includes('credentials') || err.message.includes('404') || err.message.includes('401'))) {
+        setMyPharmacy(null);
+      }
+    }
+  };
+
+  const handleLaunchStore = async () => {
+    setLoading(true);
+    try {
+      const updatedStore = await api.post('/pharmacies/launch');
+      setMyPharmacy(updatedStore);
+      triggerNotification('Store is now live and visible to customers!');
+      loadPharmacyData();
+    } catch (err) {
+      triggerNotification(err.message || 'Launch failed', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -533,8 +556,13 @@ export default function App() {
   };
 
   // Request physical verification setup (Step 2)
-  const handleRequestVerification = async (e) => {
+  const handleRequestVerification = (e) => {
     e.preventDefault();
+    setShowVerificationConfirmModal(true);
+  };
+
+  const confirmRequestVerification = async () => {
+    setShowVerificationConfirmModal(false);
     try {
       const updated = await api.post('/pharmacies/request-verification', scheduleForm);
       setMyPharmacy(updated);
@@ -665,6 +693,8 @@ export default function App() {
       setAdminReports(reps || []);
       const logs = await api.get('/admin/logs');
       setAdminLogs(logs || []);
+      const execs = await api.get('/admin/executives');
+      setAdminExecutives(execs || []);
     } catch (err) {
       console.error(err);
     }
@@ -753,7 +783,7 @@ export default function App() {
             </div>
             <div>
               <h1 className="text-xl font-bold text-slate-100 flex items-center gap-1.5">
-                MedSafe <span className="text-xs px-2 py-0.5 rounded bg-teal-500/10 text-teal-400 border border-teal-500/25">Medicine Platform</span>
+                MedSafe
               </h1>
               <p className="text-[10px] text-slate-400 font-mono">HYPERLOCAL MEDICINE SECURITY & TRANSPARENCY</p>
             </div>
@@ -843,10 +873,10 @@ export default function App() {
                       onChange={(e) => setAuthRole(e.target.value)}
                       className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-white focus:outline-none"
                     >
-                      <option value="customer">Customer (Price Compare, Discover Stores)</option>
-                      <option value="pharmacy">Pharmacy Store Owner (Register Profile, Sync Stocks)</option>
-                      <option value="executive">Verification Deployed Inspector (Verification team)</option>
-                      <option value="admin">SuperAdmin Control Panel (Platform Audit)</option>
+                      <option value="customer">Customer</option>
+                      <option value="pharmacy">Pharmacy Store Owner</option>
+                      <option value="executive">Verification Deployed Inspector</option>
+                      <option value="admin">SuperAdmin</option>
                     </select>
                   </div>
 
@@ -1873,21 +1903,47 @@ export default function App() {
                   {/* Status Banner */}
                   {myPharmacy ? (
                     <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                      <div className="flex items-center justify-between">
+                      <div className="flex items-center justify-between flex-wrap gap-4">
                         <div>
                           <span className="text-[10px] font-mono text-slate-500">PHARMACY ONBOARDING ID: {myPharmacy._id}</span>
-                          <h2 className="text-base font-bold text-slate-100 mt-1">{myPharmacy.name}</h2>
+                          <h2 className="text-base font-bold text-slate-100 mt-1 flex items-center gap-2">
+                            {myPharmacy.name}
+                            {myPharmacy.isLaunched && (
+                              <div className="relative inline-flex items-center justify-center bg-red-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded shadow-sm tracking-widest leading-none mr-2 font-mono ml-1.5 select-none">
+                                LIVE
+                                <div className="absolute -top-1.5 -right-2 bg-white rounded-full p-[1px] shadow-sm border border-red-200 flex items-center justify-center">
+                                  <span className="relative flex h-2.5 w-2.5">
+                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-650 items-center justify-center">
+                                      <Radio className="w-1.5 h-1.5 text-white" />
+                                    </span>
+                                  </span>
+                                </div>
+                              </div>
+                            )}
+                          </h2>
                           <p className="text-xs text-slate-400">{myPharmacy.address}</p>
+                          {myPharmacy.assignedExecutiveName && (
+                            <div className="mt-3 flex items-center gap-2 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl w-fit">
+                              <User className="w-3.5 h-3.5 text-indigo-600" />
+                              <span>
+                                Deployed Inspector: <strong className="text-indigo-950">{myPharmacy.assignedExecutiveName}</strong> 
+                                {myPharmacy.visitScheduleDate && ` (Scheduled: ${myPharmacy.visitScheduleDate})`}
+                              </span>
+                            </div>
+                          )}
                         </div>
                         
                         {/* Onboarding Stage Badging */}
-                        <div className={`px-4 py-2 rounded-xl text-xs font-bold border ${
-                          myPharmacy.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 glow-verified' :
-                          myPharmacy.status === 'Verification Requested' ? 'bg-blue-500/10 border-blue-500 text-blue-400' :
-                          myPharmacy.status === 'Executive Assigned' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400 animate-pulse' :
-                          'bg-amber-500/10 border-amber-500 text-amber-400'
-                        }`}>
-                          {myPharmacy.status}
+                        <div className="flex flex-col items-end gap-1.5">
+                          <div className={`px-4 py-2 rounded-xl text-xs font-bold border ${
+                            myPharmacy.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 glow-verified' :
+                            myPharmacy.status === 'Verification Requested' ? 'bg-blue-500/10 border-blue-500 text-blue-400' :
+                            myPharmacy.status === 'Executive Assigned' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400 animate-pulse' :
+                            'bg-amber-500/10 border-amber-500 text-amber-400'
+                          }`}>
+                            {myPharmacy.status}
+                          </div>
                         </div>
                       </div>
 
@@ -1900,10 +1956,10 @@ export default function App() {
                           <div className="absolute top-3 left-6 right-6 h-[2px] bg-slate-800 -z-10"></div>
                           
                           {[
-                            { step: 'Register', active: true, desc: 'Store details & licenses uploaded' },
-                            { step: 'Setup Request', active: ['Verification Requested', 'Executive Assigned', 'Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status), desc: 'Booked physical audit' },
-                            { step: 'Physical Audit', active: ['Executive Assigned', 'Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status), desc: 'Inspector checklist sync' },
-                            { step: 'Verified Badge', active: myPharmacy.status === 'Approved & Verified', desc: 'Public pricing live' }
+                            {step: 'Register', active: true, desc: 'Store details & licenses uploaded'},
+                            {step: 'Setup Request', active: ['Verification Requested', 'Executive Assigned', 'Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status), desc: 'Booked physical audit'},
+                            {step: 'Physical Audit', active: myPharmacy.status === 'Approved & Verified', desc: 'Inspector checklist sync'},
+                            {step: 'Verified Badge', active: myPharmacy.status === 'Approved & Verified', desc: 'Public pricing live'}
                           ].map((s, idx) => (
                             <div key={idx} className="flex flex-col items-center text-center px-1">
                               <div className={`w-7 h-7 rounded-full flex items-center justify-center border font-mono text-xs font-bold transition duration-300 ${
@@ -1918,13 +1974,37 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* If pending request, let store initiate Verification Request */}
-                      {myPharmacy.status === 'Pending Verification Request' && (
-                        <div className="mt-6 border-t border-slate-800 pt-6 flex flex-col gap-4">
-                          <div className="flex items-start gap-3 bg-amber-500/10 border border-amber-500/25 p-4 rounded-xl text-xs text-amber-200">
-                            <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-400" />
+                      {myPharmacy.status === 'Approved & Verified' && !myPharmacy.isLaunched && (
+                        <div className="mt-4 bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-center justify-between flex-wrap gap-4 text-xs text-emerald-800">
+                          <div className="flex items-start gap-3">
+                            <Check className="w-5 h-5 flex-shrink-0 text-emerald-600 mt-0.5" />
                             <div>
-                              <strong className="block text-amber-300 font-bold mb-1">Step 2 Required: Setup Assistance & Onboarding Request</strong>
+                              <strong className="block text-emerald-900 font-bold mb-1">Store Verification Complete!</strong>
+                              Your store has been verified by our Deployed Inspector and approved by the SuperAdmin. Click below to launch your store online and become visible to customers.
+                            </div>
+                          </div>
+                          <button
+                            onClick={handleLaunchStore}
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs px-6 py-2.5 rounded-xl transition"
+                          >
+                            Launch Store & Go Live
+                          </button>
+                        </div>
+                      )}
+
+                      {/* If pending request, or rejected/correction required, let store initiate Verification Request */}
+                      {['Pending Verification Request', 'Needs Corrections', 'Rejected'].includes(myPharmacy.status) && (
+                        <div className="mt-6 border-t border-slate-800 pt-6 flex flex-col gap-4">
+                          {['Needs Corrections', 'Rejected'].includes(myPharmacy.status) && (
+                            <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl text-xs text-rose-800 mb-2">
+                              <strong className="block text-rose-900 font-bold mb-1">Attention: Onboarding Request Declined</strong>
+                              Reason: <span className="italic text-rose-700 font-semibold">"{myPharmacy.adminComments || 'No details provided.'}"</span>. Please update your details and resubmit the verification request.
+                            </div>
+                          )}
+                          <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 p-4 rounded-xl text-xs text-amber-800">
+                            <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-600" />
+                            <div>
+                              <strong className="block text-amber-900 font-bold mb-1">Required: Setup Assistance & Onboarding Request</strong>
                               Your pharmacy profile is registered offline, but cannot sell or be discovered until an official app-side Verification Executive physically visits your store to perform compliance checks, document verification, and configure barcode scanner systems.
                             </div>
                           </div>
@@ -1949,7 +2029,7 @@ export default function App() {
                                 className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
                               />
                             </div>
-                            <div className="flex items-center gap-4 mt-2">
+                            <div className="flex items-center gap-4 mt-2 flex-wrap">
                               <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
                                 <input 
                                   type="checkbox"
@@ -1967,6 +2047,15 @@ export default function App() {
                                   className="accent-teal-500"
                                 />
                                 Billing Software Installed
+                              </label>
+                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                <input 
+                                  type="checkbox"
+                                  checked={scheduleForm.debitCreditAvailable}
+                                  onChange={(e) => setScheduleForm({ ...scheduleForm, debitCreditAvailable: e.target.checked })}
+                                  className="accent-teal-500"
+                                />
+                                Debit/Credit Card Machine Installed
                               </label>
                             </div>
                             <div className="md:col-span-2 flex flex-col gap-1">
@@ -2043,6 +2132,7 @@ export default function App() {
                           <input 
                             type="text" 
                             required
+                            placeholder="Ground Floor, Tulip Plaza, Sector 4, Mumbai"
                             value={regForm.address}
                             onChange={(e) => setRegForm({ ...regForm, address: e.target.value })}
                             className="bg-slate-900 border border-slate-800 rounded-xl p-3 text-xs text-white"
@@ -2071,20 +2161,20 @@ export default function App() {
                           type="submit"
                           className="md:col-span-2 bg-gradient-to-r from-teal-500 to-teal-600 text-slate-950 font-extrabold text-xs py-3 rounded-xl transition hover:opacity-90 shadow-xl mt-3"
                         >
-                          Step 1: Create Pharmacy Profile
+                          Create Pharmacy Profile
                         </button>
                       </form>
                     </div>
                   )}
 
                   {/* Real-time Inventory management desk (If profile exists, even if unverified) */}
-                  {myPharmacy && (
+                  {myPharmacy && !['Pending Verification Request', 'Verification Requested'].includes(myPharmacy.status) && (
                     <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
                       
                       {/* Inventory Sync Card */}
                       <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
                         <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2 font-mono">
-                          <RefreshCw className="w-4 h-4 text-teal-400" /> Automated Billing Sync (Step 4-D)
+                          <RefreshCw className="w-4 h-4 text-teal-400" /> Automated Billing Sync
                         </h3>
                         <p className="text-xs text-slate-400">Connect your local retail pharmacy billing system (Tally, Marg, Medilite) to automatically synchronize catalog price levels and real-time stocks.</p>
                         
@@ -2094,11 +2184,11 @@ export default function App() {
                               type="text" 
                               value={billingSoftwareName}
                               onChange={(e) => setBillingSoftwareName(e.target.value)}
-                              className="bg-slate-900 border border-slate-800 p-2 text-xs rounded-lg flex-1 text-white font-mono"
+                              className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg flex-1 text-slate-100 font-mono focus:outline-none focus:border-indigo-500 transition"
                             />
                             <button
                               onClick={handleSyncBillingSystem}
-                              className="bg-slate-800 hover:bg-slate-700 text-teal-400 border border-teal-500/30 px-4 py-2 rounded-lg text-xs font-bold transition flex items-center gap-1"
+                              className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg text-xs font-bold transition"
                             >
                               Sync System
                             </button>
@@ -2122,7 +2212,7 @@ export default function App() {
                             <select
                               value={newInvItem.medicineId}
                               onChange={(e) => setNewInvItem({ ...newInvItem, medicineId: e.target.value })}
-                              className="bg-slate-900 border border-slate-800 rounded p-2 text-xs text-slate-200"
+                              className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition"
                             >
                               <option value="">-- Choose Medicine --</option>
                               {allMedicines.map(m => (
@@ -2139,7 +2229,7 @@ export default function App() {
                                 placeholder="Price"
                                 value={newInvItem.price}
                                 onChange={(e) => setNewInvItem({ ...newInvItem, price: e.target.value })}
-                                className="bg-slate-900 border border-slate-800 p-2 text-xs rounded text-white"
+                                className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg text-slate-100 focus:outline-none focus:border-indigo-500 transition"
                               />
                             </div>
                             <div className="flex flex-col gap-1">
@@ -2149,14 +2239,14 @@ export default function App() {
                                 placeholder="Stock count"
                                 value={newInvItem.stock}
                                 onChange={(e) => setNewInvItem({ ...newInvItem, stock: e.target.value })}
-                                className="bg-slate-900 border border-slate-800 p-2 text-xs rounded text-white"
+                                className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg text-slate-100 focus:outline-none focus:border-indigo-500 transition"
                               />
                             </div>
                           </div>
 
                           <button
                             type="submit"
-                            className="bg-slate-800 hover:bg-slate-700 text-white font-bold text-xs py-2 px-4 rounded mt-1"
+                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-2.5 px-4 rounded-lg mt-1 transition"
                           >
                             Update Stock Entry
                           </button>
@@ -2260,8 +2350,16 @@ export default function App() {
                                   <h4 className="font-bold text-slate-200">{store.name}</h4>
                                   <p className="text-[10px] text-slate-500 truncate max-w-[200px] mt-0.5">{store.address}</p>
                                 </div>
-                                <span className="px-2 py-0.5 rounded text-[8px] bg-slate-900 border border-slate-800 text-indigo-300 font-mono uppercase">
-                                  {store.status}
+                                <span className={`px-2 py-0.5 rounded text-[8px] font-mono uppercase border ${
+                                  store.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold' :
+                                  store.status === 'Under Admin Review' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-bold' :
+                                  store.status === 'Executive Assigned' ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400' :
+                                  'bg-slate-900 border-slate-800 text-indigo-300'
+                                }`}>
+                                  {store.status === 'Approved & Verified' ? 'Completed' : 
+                                   store.status === 'Under Admin Review' ? 'Under Admin Review' : 
+                                   store.status === 'Executive Assigned' ? 'Pending Audit' : 
+                                   store.status}
                                 </span>
                               </div>
                               <div className="mt-3 flex items-center justify-between text-[10px] font-mono text-slate-400">
@@ -2282,117 +2380,134 @@ export default function App() {
                             <p className="text-xs text-slate-400">Complete legal, clinical, and technical parameters during store inspection.</p>
                           </div>
 
-                          <form onSubmit={handleExecReportSubmit} className="flex flex-col gap-6">
-                            
-                            {/* Certification Audit */}
-                            <div className="flex flex-col gap-3">
-                              <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">A. Certification & Legal Verification (Step 4-A)</span>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checklist.licenceVerified}
-                                    onChange={(e) => setChecklist({ ...checklist, licenceVerified: e.target.checked })}
-                                    className="w-4 h-4 accent-indigo-500 rounded"
-                                  />
-                                  <span>Drug License DL Authenticity Verified</span>
-                                </label>
-                                <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checklist.gstVerified}
-                                    onChange={(e) => setChecklist({ ...checklist, gstVerified: e.target.checked })}
-                                    className="w-4 h-4 accent-indigo-500 rounded"
-                                  />
-                                  <span>GST Certificate matches state records</span>
-                                </label>
+                          {['Under Admin Review', 'Approved & Verified'].includes(activeAssignment.status) ? (
+                            <div className="flex flex-col items-center justify-center py-12 text-center gap-4 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-6">
+                              <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
+                                <Check className="w-6 h-6" />
+                              </div>
+                              <div>
+                                <h4 className="text-sm font-bold text-slate-100">Audit Questionnaire Submitted</h4>
+                                <p className="text-xs text-slate-400 mt-1">
+                                  The physical audit checklist has been synced and uploaded to the SuperAdmin Command Center.
+                                </p>
+                              </div>
+                              <div className="px-3 py-1 rounded-xl text-[10px] font-mono font-bold bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 uppercase tracking-wider">
+                                Status: {activeAssignment.status === 'Approved & Verified' ? 'Approved by Admin' : 'Under Admin Review'}
                               </div>
                             </div>
-
-                            {/* Medicine Quality Audit */}
-                            <div className="flex flex-col gap-3">
-                              <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">B. Medicine Quality & Safety Verification (Step 4-B)</span>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checklist.qualityChecked}
-                                    onChange={(e) => setChecklist({ ...checklist, qualityChecked: e.target.checked })}
-                                    className="w-4 h-4 accent-indigo-500 rounded"
-                                  />
-                                  <span>Storage temperature check passed (2-8°C/Cold Chain)</span>
-                                </label>
-                                <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checklist.noExpiredStock}
-                                    onChange={(e) => setChecklist({ ...checklist, noExpiredStock: e.target.checked })}
-                                    className="w-4 h-4 accent-indigo-500 rounded"
-                                  />
-                                  <span>Inspected drug shelves (Zero Expired SKU found)</span>
-                                </label>
-                              </div>
-                            </div>
-
-                            {/* Technical Audit */}
-                            <div className="flex flex-col gap-3">
-                              <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">C. Technical & Inventory Setup (Step 4-C/D)</span>
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checklist.barcodeConfigured}
-                                    onChange={(e) => setChecklist({ ...checklist, barcodeConfigured: e.target.checked })}
-                                    className="w-4 h-4 accent-indigo-500 rounded"
-                                  />
-                                  <span>MedSafe barcode scanner calibrated</span>
-                                </label>
-                                <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                  <input 
-                                    type="checkbox"
-                                    checked={checklist.billingSynced}
-                                    onChange={(e) => setChecklist({ ...checklist, billingSynced: e.target.checked })}
-                                    className="w-4 h-4 accent-indigo-500 rounded"
-                                  />
-                                  <span>Billing Sync API integrator successfully linked</span>
-                                </label>
-                              </div>
-                            </div>
-
-                            {/* Verification Recommendation */}
-                            <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-xs text-slate-400 font-medium">Final Audit Recommendation (Step 5)</label>
-                                <select
-                                  value={executiveRecommendation}
-                                  onChange={(e) => setExecutiveRecommendation(e.target.value)}
-                                  className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white font-mono"
-                                >
-                                  <option value="Approved">Approved (Certifications Authentic, Inventory Accurate)</option>
-                                  <option value="Needs Corrections">Needs Corrections (Fix expired stock, update labels)</option>
-                                  <option value="Rejected">Rejected (Fraudulent license, high risk factors)</option>
-                                </select>
+                          ) : (
+                            <form onSubmit={handleExecReportSubmit} className="flex flex-col gap-6">
+                              
+                              {/* Certification Audit */}
+                              <div className="flex flex-col gap-3">
+                                <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">A. Certification & Legal Verification</span>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                    <input 
+                                      type="checkbox"
+                                      checked={checklist.licenceVerified}
+                                      onChange={(e) => setChecklist({ ...checklist, licenceVerified: e.target.checked })}
+                                      className="w-4 h-4 accent-indigo-500 rounded"
+                                    />
+                                    <span>Drug License DL Authenticity Verified</span>
+                                  </label>
+                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                    <input 
+                                      type="checkbox"
+                                      checked={checklist.gstVerified}
+                                      onChange={(e) => setChecklist({ ...checklist, gstVerified: e.target.checked })}
+                                      className="w-4 h-4 accent-indigo-500 rounded"
+                                    />
+                                    <span>GST Certificate matches state records</span>
+                                  </label>
+                                </div>
                               </div>
 
-                              <div className="flex flex-col gap-1.5">
-                                <label className="text-xs text-slate-400 font-medium">Verification Executive Assessment Notes</label>
-                                <input 
-                                  type="text" 
-                                  placeholder="Type notes on drug legitimacy, storage conditions..."
-                                  value={executiveNotes}
-                                  onChange={(e) => setExecutiveNotes(e.target.value)}
-                                  className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white"
-                                />
+                              {/* Medicine Quality Audit */}
+                              <div className="flex flex-col gap-3">
+                                <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">B. Medicine Quality & Safety Verification</span>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                    <input 
+                                      type="checkbox"
+                                      checked={checklist.qualityChecked}
+                                      onChange={(e) => setChecklist({ ...checklist, qualityChecked: e.target.checked })}
+                                      className="w-4 h-4 accent-indigo-500 rounded"
+                                    />
+                                    <span>Storage temperature check passed (2-8°C/Cold Chain)</span>
+                                  </label>
+                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                    <input 
+                                      type="checkbox"
+                                      checked={checklist.noExpiredStock}
+                                      onChange={(e) => setChecklist({ ...checklist, noExpiredStock: e.target.checked })}
+                                      className="w-4 h-4 accent-indigo-500 rounded"
+                                    />
+                                    <span>Inspected drug shelves (Zero Expired SKU found)</span>
+                                  </label>
+                                </div>
                               </div>
-                            </div>
 
-                            <button
-                              type="submit"
-                              className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-6 rounded-xl transition self-end"
-                            >
-                              Submit Audit Report to Admin Panel
-                            </button>
-                          </form>
+                              {/* Technical Audit */}
+                              <div className="flex flex-col gap-3">
+                                <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">C. Technical & Inventory Setup</span>
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                    <input 
+                                      type="checkbox"
+                                      checked={checklist.barcodeConfigured}
+                                      onChange={(e) => setChecklist({ ...checklist, barcodeConfigured: e.target.checked })}
+                                      className="w-4 h-4 accent-indigo-500 rounded"
+                                    />
+                                    <span>MedSafe barcode scanner calibrated</span>
+                                  </label>
+                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                    <input 
+                                      type="checkbox"
+                                      checked={checklist.billingSynced}
+                                      onChange={(e) => setChecklist({ ...checklist, billingSynced: e.target.checked })}
+                                      className="w-4 h-4 accent-indigo-500 rounded"
+                                    />
+                                    <span>Billing Sync API integrator successfully linked</span>
+                                  </label>
+                                </div>
+                              </div>
+
+                              {/* Verification Recommendation */}
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                <div className="flex flex-col gap-1.5">
+                                  <label className="text-xs text-slate-400 font-medium">Final Audit Recommendation</label>
+                                  <select
+                                    value={executiveRecommendation}
+                                    onChange={(e) => setExecutiveRecommendation(e.target.value)}
+                                    className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white font-mono"
+                                  >
+                                    <option value="Approved">Approved (Certifications Authentic, Inventory Accurate)</option>
+                                    <option value="Needs Corrections">Needs Corrections (Fix expired stock, update labels)</option>
+                                    <option value="Rejected">Rejected (Fraudulent license, high risk factors)</option>
+                                  </select>
+                                </div>
+
+                                <div className="flex flex-col gap-1.5">
+                                  <label className="text-xs text-slate-400 font-medium">Verification Executive Assessment Notes</label>
+                                  <input 
+                                    type="text" 
+                                    placeholder="Type notes on drug legitimacy, storage conditions..."
+                                    value={executiveNotes}
+                                    onChange={(e) => setExecutiveNotes(e.target.value)}
+                                    className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white"
+                                  />
+                                </div>
+                              </div>
+
+                              <button
+                                type="submit"
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-6 rounded-xl transition self-end"
+                              >
+                                Submit Audit Report to Admin Panel
+                              </button>
+                            </form>
+                          )}
                         </div>
                       )}
                     </div>
@@ -2435,7 +2550,7 @@ export default function App() {
                   {/* Assign Verification Executive (Step 3 Workspace) */}
                   <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
                     <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <ClipboardList className="w-5 h-5 text-indigo-400" /> Executive Deployment Hub (Step 3)
+                      <ClipboardList className="w-5 h-5 text-indigo-400" /> Executive Deployment Hub
                     </h3>
                     <p className="text-xs text-slate-400">Admin assigns physically closest inspector to visit pharmacies that submitted onboarding requests.</p>
 
@@ -2458,11 +2573,15 @@ export default function App() {
                       <div className="flex flex-col gap-1">
                         <label className="text-[10px] text-slate-500 font-mono">Assign Inspector</label>
                         <select
+                          required
                           value={assigningExecId}
                           onChange={(e) => setAssigningExecId(e.target.value)}
                           className="bg-slate-900 border border-slate-800 rounded p-2.5 text-xs text-slate-100"
                         >
-                          <option value="u3">Inspector Vikram (Active)</option>
+                          <option value="">-- Choose Inspector --</option>
+                          {adminExecutives.map(exec => (
+                            <option key={exec._id} value={exec._id}>{exec.name} (Active)</option>
+                          ))}
                         </select>
                       </div>
 
@@ -2478,7 +2597,7 @@ export default function App() {
                   {/* Pending Audits Approval desk (Step 6 Workspace) */}
                   <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
                     <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <ShieldCheck className="w-5 h-5 text-emerald-400" /> Physical Audit Approvals Workspace (Step 6)
+                      <ShieldCheck className="w-5 h-5 text-emerald-400" /> Physical Audit Approvals Workspace
                     </h3>
                     <p className="text-xs text-slate-400">Review physical verification reports uploaded by deployed Inspectors and grant the trusted verified badge.</p>
 
@@ -2623,6 +2742,55 @@ export default function App() {
           <span className="hover:text-slate-300 cursor-pointer">Anti-Fraud Agreement</span>
         </div>
       </footer>
+
+      {showVerificationConfirmModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/80 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-5">
+            <div>
+              <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                <ShieldCheck className="w-5 h-5 text-teal-400" /> Double Check Checklist
+              </h3>
+              <p className="text-xs text-slate-400 mt-1">Please confirm the following hardware and software options before requesting physical inspection.</p>
+            </div>
+            
+            <div className="flex flex-col gap-3 bg-slate-950 p-4 rounded-xl border border-slate-800/80 font-mono text-xs">
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Barcode Scanner Available:</span>
+                <span className={`font-bold px-2 py-0.5 rounded ${scheduleForm.barcodeSystemAvailable ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                  {scheduleForm.barcodeSystemAvailable ? '✓ YES' : '✗ NO'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Billing Software Installed:</span>
+                <span className={`font-bold px-2 py-0.5 rounded ${scheduleForm.billingSoftwareAvailable ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                  {scheduleForm.billingSoftwareAvailable ? '✓ YES' : '✗ NO'}
+                </span>
+              </div>
+              <div className="flex justify-between items-center">
+                <span className="text-slate-400">Debit/Credit Card Machine:</span>
+                <span className={`font-bold px-2 py-0.5 rounded ${scheduleForm.debitCreditAvailable ? 'bg-emerald-500/10 text-emerald-400' : 'bg-rose-500/10 text-rose-400'}`}>
+                  {scheduleForm.debitCreditAvailable ? '✓ YES' : '✗ NO'}
+                </span>
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3">
+              <button
+                onClick={() => setShowVerificationConfirmModal(false)}
+                className="flex-1 bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-4 rounded-xl text-xs transition"
+              >
+                Go Back
+              </button>
+              <button
+                onClick={confirmRequestVerification}
+                className="flex-1 bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold py-2.5 px-4 rounded-xl text-xs transition shadow-lg shadow-teal-500/20"
+              >
+                Confirm & Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

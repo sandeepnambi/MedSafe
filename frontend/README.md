@@ -106,9 +106,3 @@ sequenceDiagram
 
 ---
 
-## 💡 Developer Information
-
-*   **API Service File:** [api.js](file:///d:/Engineering/Medsafe/frontend/src/utils/api.js) — Handles API routing and local database simulation fallback.
-*   **Main Component:** [App.jsx](file:///d:/Engineering/Medsafe/frontend/src/App.jsx) — Holds the page layout, navigation tabs, and simulation controls.
-*   **Styling Rules:** [index.css](file:///d:/Engineering/Medsafe/frontend/src/index.css) — Custom styles and class configurations.
-
