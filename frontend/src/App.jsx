@@ -170,6 +170,8 @@ export default function App() {
   // Executive Panel States
   const [executiveAssignments, setExecutiveAssignments] = useState([]);
   const [activeAssignment, setActiveAssignment] = useState(null);
+  const [executiveReports, setExecutiveReports] = useState([]);
+  const [execTab, setExecTab] = useState('active'); // active, past
   const [checklist, setChecklist] = useState({
     licenceVerified: false,
     gstVerified: false,
@@ -181,6 +183,7 @@ export default function App() {
   });
   const [executiveNotes, setExecutiveNotes] = useState('');
   const [executiveRecommendation, setExecutiveRecommendation] = useState('Approved');
+  const [showExecProfileModal, setShowExecProfileModal] = useState(false);
 
   // Admin Portal States
   const [adminPharmacies, setAdminPharmacies] = useState([]);
@@ -188,6 +191,10 @@ export default function App() {
   const [adminReports, setAdminReports] = useState([]);
   const [adminLogs, setAdminLogs] = useState([]);
   const [adminExecutives, setAdminExecutives] = useState([]);
+  const [adminUsers, setAdminUsers] = useState([]);
+  const [adminTab, setAdminTab] = useState('command'); // command, people, stores
+  const [selectedUserDetail, setSelectedUserDetail] = useState(null);
+  const [selectedStoreDetail, setSelectedStoreDetail] = useState(null);
   const [assigningStoreId, setAssigningStoreId] = useState('');
   const [assigningExecId, setAssigningExecId] = useState(''); // default empty
   const [assigningDate, setAssigningDate] = useState('2026-05-30');
@@ -643,9 +650,10 @@ export default function App() {
     try {
       const list = await api.get('/executive/assignments');
       setExecutiveAssignments(list || []);
-      if (list && list.length > 0) {
-        setActiveAssignment(list[0]);
-      }
+      
+      const reports = await api.get('/executive/reports');
+      setExecutiveReports(reports || []);
+      setActiveAssignment(null);
     } catch (err) {
       console.error(err);
     }
@@ -695,6 +703,8 @@ export default function App() {
       setAdminLogs(logs || []);
       const execs = await api.get('/admin/executives');
       setAdminExecutives(execs || []);
+      const usersList = await api.get('/admin/users');
+      setAdminUsers(usersList || []);
     } catch (err) {
       console.error(err);
     }
@@ -985,10 +995,12 @@ export default function App() {
               onClick={() => {
                 if (currentUser.role === 'customer') {
                   setCustomerTab('dashboard');
+                } else if (currentUser.role === 'executive') {
+                  setExecTab('profile');
                 }
               }}
               className="flex flex-col text-right cursor-pointer hover:opacity-80 transition"
-              title="View Health Profile Dashboard"
+              title={currentUser.role === 'executive' ? 'View Inspector Credentials' : 'View Health Profile Dashboard'}
             >
               <span className="text-xs font-bold text-slate-100 leading-none border-b border-dashed border-teal-500/30 pb-0.5">{beautifyName(currentUser.name)}</span>
               <span className="text-[9px] font-mono text-teal-400 capitalize mt-0.5">{currentUser.role === 'executive' ? 'Verification Deployed Inspector' : currentUser.role}</span>
@@ -997,10 +1009,12 @@ export default function App() {
               onClick={() => {
                 if (currentUser.role === 'customer') {
                   setCustomerTab('dashboard');
+                } else if (currentUser.role === 'executive') {
+                  setExecTab('profile');
                 }
               }}
               className="bg-teal-500/10 p-1.5 rounded-lg border border-teal-500/25 cursor-pointer hover:bg-teal-500/20 transition"
-              title="View Health Profile Dashboard"
+              title={currentUser.role === 'executive' ? 'View Inspector Credentials' : 'View Health Profile Dashboard'}
             >
               <User className="w-4 h-4 text-teal-400" />
             </div>
@@ -2302,220 +2316,488 @@ export default function App() {
                 </div>
               )}
 
-              {/* ==================== 3. VERIFICATION EXECUTIVE PANE ==================== */}
               {activeRole === 'executive' && (
                 <div className="flex flex-col gap-6">
-                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800">
-                    <div className="flex items-center gap-3">
-                      <div className="p-3 bg-indigo-500/15 rounded-xl border border-indigo-500/25">
-                        <ClipboardList className="w-6 h-6 text-indigo-400" />
+                  {/* Inspector Identity Card */}
+                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col md:flex-row md:items-center justify-between gap-6">
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-indigo-400 flex items-center justify-center text-white font-extrabold text-lg shadow-lg shadow-indigo-500/10">
+                        {currentUser?.name?.charAt(0).toUpperCase() || 'I'}
                       </div>
-                      <div>
-                        <h2 className="text-sm font-bold text-slate-100">Verification Inspector Dashboard</h2>
-                        <p className="text-xs text-slate-400">Perform physical onboarding checks and medicine verification audits</p>
+                      <div className="flex flex-col gap-0.5">
+                        <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-widest font-bold">Field Inspector Workspace</span>
+                        <h2 className="text-base font-bold text-slate-100">{beautifyName(currentUser?.name)}</h2>
+                        <span className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                          <MapPin className="w-3.5 h-3.5 text-slate-500" /> Authorized Auditor Region: West District
+                        </span>
+                      </div>
+                    </div>
+
+                    <div className="flex flex-wrap items-center gap-4">
+
+                      <div className="bg-slate-900 border border-slate-800/80 px-4 py-3 rounded-xl text-left min-w-[100px]">
+                        <span className="text-[9px] text-slate-500 block font-mono uppercase tracking-wider">Pending</span>
+                        <span className="text-xs font-bold text-amber-400 mt-1 block flex items-center gap-1.5">
+                          <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
+                          {executiveAssignments.filter(store => !['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length} Tasks
+                        </span>
+                      </div>
+
+                      <div className="bg-slate-900 border border-slate-800/80 px-4 py-3 rounded-xl text-left min-w-[100px]">
+                        <span className="text-[9px] text-slate-500 block font-mono uppercase tracking-wider">Completed</span>
+                        <span className="text-xs font-bold text-emerald-400 mt-1 block">
+                          {executiveAssignments.filter(store => ['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length} Audits
+                        </span>
                       </div>
                     </div>
                   </div>
 
-                  {executiveAssignments.length > 0 ? (
-                    <div className="grid grid-cols-1 gap-6">
-                      
-                      {/* Left: Active Selection List */}
-                      <div className="flex flex-col gap-4">
-                        <span className="text-xs font-mono uppercase text-slate-500 tracking-wider">Dispatched Visit Assignments</span>
-                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                          {executiveAssignments.map(store => (
-                            <div
-                              key={store._id}
-                              onClick={() => {
-                                setActiveAssignment(store);
-                                setChecklist({
-                                  licenceVerified: false,
-                                  gstVerified: false,
-                                  qualityChecked: false,
-                                  noExpiredStock: false,
-                                  barcodeConfigured: false,
-                                  billingSynced: false,
-                                  staffTrained: false
-                                });
-                              }}
-                              className={`p-4 rounded-xl border cursor-pointer transition ${
-                                activeAssignment?._id === store._id 
-                                  ? 'border-indigo-500 bg-indigo-950/10' 
-                                  : 'border-slate-800 bg-slate-950 hover:border-slate-700'
-                              }`}
-                            >
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h4 className="font-bold text-slate-200">{store.name}</h4>
-                                  <p className="text-[10px] text-slate-500 truncate max-w-[200px] mt-0.5">{store.address}</p>
-                                </div>
-                                <span className={`px-2 py-0.5 rounded text-[8px] font-mono uppercase border ${
-                                  store.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400 font-bold' :
-                                  store.status === 'Under Admin Review' ? 'bg-amber-500/10 border-amber-500/30 text-amber-400 font-bold' :
-                                  store.status === 'Executive Assigned' ? 'bg-indigo-500/10 border-indigo-500/30 text-indigo-400' :
-                                  'bg-slate-900 border-slate-800 text-indigo-300'
-                                }`}>
-                                  {store.status === 'Approved & Verified' ? 'Completed' : 
-                                   store.status === 'Under Admin Review' ? 'Under Admin Review' : 
-                                   store.status === 'Executive Assigned' ? 'Pending Audit' : 
-                                   store.status}
-                                </span>
-                              </div>
-                              <div className="mt-3 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                                <span>Owner: {store.ownerName}</span>
-                                <span className="text-indigo-400">Schedule: {store.visitScheduleDate || 'Today'}</span>
-                              </div>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                  {/* Executive Navigation Sub-Tabs */}
+                  <div className="flex gap-2 border-b border-slate-800 pb-px">
+                    <button
+                      onClick={() => {
+                        setExecTab('active');
+                        setActiveAssignment(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        execTab === 'active' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
+                      Active Audit Tasks ({executiveAssignments.filter(store => !['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length})
+                    </button>
+                    
+                    <button
+                      onClick={() => {
+                        setExecTab('past');
+                        setActiveAssignment(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        execTab === 'past' 
+                          ? 'border-emerald-500 text-emerald-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <History className="w-3.5 h-3.5" />
+                      Past History & Records ({executiveAssignments.filter(store => ['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length})
+                    </button>
 
-                      {/* Right: Checklist Report Submitter */}
-                      {activeAssignment && (
-                        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6">
+                    <button
+                      onClick={() => {
+                        setExecTab('profile');
+                        setActiveAssignment(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        execTab === 'profile' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5" />
+                      Inspector Profile
+                    </button>
+                  </div>
+
+                  {(() => {
+                    const activeAssignments = executiveAssignments.filter(store => !['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status));
+                    const pastAssignments = executiveAssignments.filter(store => ['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status));
+                    const currentList = execTab === 'active' ? activeAssignments : pastAssignments;
+                    const matchedReport = activeAssignment ? executiveReports.find(r => r.pharmacyId === activeAssignment._id) : null;
+
+                    if (execTab === 'profile') {
+                      return (
+                        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6 animate-fade-in">
                           <div>
-                            <span className="text-[9px] font-mono text-slate-500 uppercase">PHYSICAL INSPECTION PROTOCOL</span>
-                            <h3 className="text-sm font-bold text-slate-100 mt-1">Audit Questionnaire: {activeAssignment.name}</h3>
-                            <p className="text-xs text-slate-400">Complete legal, clinical, and technical parameters during store inspection.</p>
+                            <span className="text-[10px] font-mono text-indigo-400 uppercase tracking-widest font-bold font-sans">Authorized Field Agent Details</span>
+                            <h3 className="text-base font-bold text-slate-100 mt-0.5">Inspector Credentials & Security Clearance Card</h3>
                           </div>
 
-                          {['Under Admin Review', 'Approved & Verified'].includes(activeAssignment.status) ? (
-                            <div className="flex flex-col items-center justify-center py-12 text-center gap-4 bg-emerald-500/5 border border-emerald-500/20 rounded-2xl p-6">
-                              <div className="w-12 h-12 rounded-full bg-emerald-500/10 border border-emerald-500/25 flex items-center justify-center text-emerald-400">
-                                <Check className="w-6 h-6" />
+                          <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col gap-4 font-mono text-xs">
+                              <span className="text-xs font-bold text-indigo-400 border-b border-slate-800 pb-1.5 font-sans">A. Personal Identification</span>
+                              <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
+                                <span className="text-slate-500 font-sans">Employee ID:</span>
+                                <span className="font-bold text-slate-200 font-sans">{currentUser?._id || currentUser?.id || 'N/A'}</span>
                               </div>
-                              <div>
-                                <h4 className="text-sm font-bold text-slate-100">Audit Questionnaire Submitted</h4>
-                                <p className="text-xs text-slate-400 mt-1">
-                                  The physical audit checklist has been synced and uploaded to the SuperAdmin Command Center.
-                                </p>
+                              <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
+                                <span className="text-slate-500 font-sans">Auditor Name:</span>
+                                <span className="font-bold text-slate-200 font-sans">{currentUser?.name}</span>
                               </div>
-                              <div className="px-3 py-1 rounded-xl text-[10px] font-mono font-bold bg-emerald-500/10 border border-emerald-500/25 text-emerald-400 uppercase tracking-wider">
-                                Status: {activeAssignment.status === 'Approved & Verified' ? 'Approved by Admin' : 'Under Admin Review'}
+                              <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
+                                <span className="text-slate-500 font-sans">Official Email:</span>
+                                <span className="font-bold text-slate-200 font-sans">{currentUser?.email}</span>
+                              </div>
+                              <div className="flex justify-between items-center py-1.5">
+                                <span className="text-slate-500 font-sans">Registered Zone:</span>
+                                <span className="font-bold text-slate-200 font-sans">West District Zone A</span>
                               </div>
                             </div>
+
+                            <div className="bg-slate-900 border border-slate-800 p-6 rounded-2xl flex flex-col gap-4 font-mono text-xs">
+                              <span className="text-xs font-bold text-indigo-400 border-b border-slate-800 pb-1.5 font-sans">B. Professional Clearance</span>
+                              <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
+                                <span className="text-slate-500 font-sans">Role Designation:</span>
+                                <span className="font-bold text-slate-200 font-sans">Verification Deployed Inspector</span>
+                              </div>
+                              <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
+                                <span className="text-slate-500 font-sans">Clearance Status:</span>
+                                <span className="text-emerald-400 font-bold bg-emerald-500/10 px-2.5 py-0.5 rounded border border-emerald-500/20 font-mono text-[9px] uppercase tracking-wider">
+                                  LEVEL 2 - AUDITOR
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
+                                <span className="text-slate-500 font-sans">Onboarding Date:</span>
+                                <span className="font-bold text-slate-200 font-sans">
+                                  {new Date(currentUser?.createdAt || '2026-02-15').toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+                                </span>
+                              </div>
+                              <div className="flex justify-between items-center py-1.5">
+                                <span className="text-slate-500 font-sans">Performance Status:</span>
+                                <span className="text-indigo-400 font-bold bg-indigo-500/10 px-2 py-0.5 rounded border border-indigo-500/20 font-sans font-bold">
+                                  ACTIVE DUTY
+                                </span>
+                              </div>
+                            </div>
+                          </div>
+
+                          <div className="p-4 bg-indigo-950/15 border border-indigo-500/20 rounded-2xl text-xs text-indigo-300 leading-relaxed font-medium">
+                            🔐 **Inspector Protocol Access Warning**: Field agents are authorized to conduct on-site verification of pharmacies, validation of Drug Licenses (DL), GST certificates, temperature loggers, and barcode configurations. Credentials must be physically displayed upon entry to any registered store location.
+                          </div>
+                        </div>
+                      );
+                    }
+
+                    return executiveAssignments.length > 0 ? (
+                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                        
+                        {/* Left column: List of assignments based on active tab */}
+                        <div className="lg:col-span-1 flex flex-col gap-4 border-r border-slate-800 pr-4">
+                          <div className="flex items-center justify-between">
+                            <span className="text-xs font-mono uppercase text-slate-400 tracking-wider flex items-center gap-1.5">
+                              {execTab === 'active' ? (
+                                <>
+                                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
+                                  Pending Audits ({activeAssignments.length})
+                                </>
+                              ) : (
+                                <>
+                                  <History className="w-3.5 h-3.5 text-emerald-400" />
+                                  Completed Audits ({pastAssignments.length})
+                                </>
+                              )}
+                            </span>
+                          </div>
+
+                          {currentList.length > 0 ? (
+                            <div className="flex flex-col gap-3 max-h-[600px] overflow-y-auto pr-1">
+                              {currentList.map(store => (
+                                <div
+                                  key={store._id}
+                                  onClick={() => {
+                                    setActiveAssignment(store);
+                                    if (execTab === 'active') {
+                                      setChecklist({
+                                        licenceVerified: false,
+                                        gstVerified: false,
+                                        qualityChecked: false,
+                                        noExpiredStock: false,
+                                        barcodeConfigured: false,
+                                        billingSynced: false,
+                                        staffTrained: false
+                                      });
+                                    }
+                                  }}
+                                  className={`p-5 rounded-2xl border transition-all duration-300 cursor-pointer flex flex-col gap-3.5 relative overflow-hidden ${
+                                    activeAssignment?._id === store._id 
+                                      ? execTab === 'active' 
+                                        ? 'border-indigo-500 bg-indigo-950/20 shadow-md shadow-indigo-500/5' 
+                                        : 'border-emerald-500 bg-emerald-950/20 shadow-md shadow-emerald-500/5'
+                                      : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900/45'
+                                  }`}
+                                >
+                                  {/* Decorative side bar indicator */}
+                                  <div className={`absolute left-0 top-0 bottom-0 w-1 transition-all duration-300 ${
+                                    activeAssignment?._id === store._id
+                                      ? execTab === 'active' ? 'bg-indigo-500' : 'bg-emerald-500'
+                                      : 'bg-transparent'
+                                  }`} />
+
+                                  <div className="flex justify-between items-start gap-2">
+                                    <div className="flex flex-col gap-1">
+                                      <h4 className="font-bold text-slate-100 text-xs sm:text-[13px] tracking-wide">{store.name}</h4>
+                                      <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5 mt-0.5">
+                                        <MapPin className="w-3.5 h-3.5 text-slate-555 flex-shrink-0" />
+                                        <span className="truncate max-w-[180px]">{store.address}</span>
+                                      </p>
+                                    </div>
+                                  </div>
+
+                                  <div className="pt-2.5 border-t border-slate-900 flex items-center justify-between text-[10px] font-mono text-slate-400">
+                                    <div className="flex items-center gap-1.5">
+                                      <span className="w-4 h-4 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 font-sans text-[8px] font-bold">
+                                        {store.ownerName?.charAt(0).toUpperCase() || 'O'}
+                                      </span>
+                                      <span>{store.ownerName}</span>
+                                    </div>
+                                    
+                                    {execTab === 'active' ? (
+                                      <span className="text-indigo-400 font-bold bg-indigo-500/10 px-2.5 py-1 rounded-lg border border-indigo-500/20 tracking-wide uppercase text-[8px]">
+                                        Pending Audit
+                                      </span>
+                                    ) : (
+                                      <span className={`px-2.5 py-1 rounded-lg border font-bold tracking-wide uppercase text-[8px] ${
+                                        store.status === 'Approved & Verified' 
+                                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                                          : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                      }`}>
+                                        {store.status === 'Approved & Verified' ? 'Approved' : 'Awaiting Review'}
+                                      </span>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                            </div>
                           ) : (
-                            <form onSubmit={handleExecReportSubmit} className="flex flex-col gap-6">
-                              
-                              {/* Certification Audit */}
-                              <div className="flex flex-col gap-3">
-                                <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">A. Certification & Legal Verification</span>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checklist.licenceVerified}
-                                      onChange={(e) => setChecklist({ ...checklist, licenceVerified: e.target.checked })}
-                                      className="w-4 h-4 accent-indigo-500 rounded"
-                                    />
-                                    <span>Drug License DL Authenticity Verified</span>
-                                  </label>
-                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checklist.gstVerified}
-                                      onChange={(e) => setChecklist({ ...checklist, gstVerified: e.target.checked })}
-                                      className="w-4 h-4 accent-indigo-500 rounded"
-                                    />
-                                    <span>GST Certificate matches state records</span>
-                                  </label>
-                                </div>
-                              </div>
-
-                              {/* Medicine Quality Audit */}
-                              <div className="flex flex-col gap-3">
-                                <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">B. Medicine Quality & Safety Verification</span>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checklist.qualityChecked}
-                                      onChange={(e) => setChecklist({ ...checklist, qualityChecked: e.target.checked })}
-                                      className="w-4 h-4 accent-indigo-500 rounded"
-                                    />
-                                    <span>Storage temperature check passed (2-8°C/Cold Chain)</span>
-                                  </label>
-                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checklist.noExpiredStock}
-                                      onChange={(e) => setChecklist({ ...checklist, noExpiredStock: e.target.checked })}
-                                      className="w-4 h-4 accent-indigo-500 rounded"
-                                    />
-                                    <span>Inspected drug shelves (Zero Expired SKU found)</span>
-                                  </label>
-                                </div>
-                              </div>
-
-                              {/* Technical Audit */}
-                              <div className="flex flex-col gap-3">
-                                <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">C. Technical & Inventory Setup</span>
-                                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
-                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checklist.barcodeConfigured}
-                                      onChange={(e) => setChecklist({ ...checklist, barcodeConfigured: e.target.checked })}
-                                      className="w-4 h-4 accent-indigo-500 rounded"
-                                    />
-                                    <span>MedSafe barcode scanner calibrated</span>
-                                  </label>
-                                  <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
-                                    <input 
-                                      type="checkbox"
-                                      checked={checklist.billingSynced}
-                                      onChange={(e) => setChecklist({ ...checklist, billingSynced: e.target.checked })}
-                                      className="w-4 h-4 accent-indigo-500 rounded"
-                                    />
-                                    <span>Billing Sync API integrator successfully linked</span>
-                                  </label>
-                                </div>
-                              </div>
-
-                              {/* Verification Recommendation */}
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                                <div className="flex flex-col gap-1.5">
-                                  <label className="text-xs text-slate-400 font-medium">Final Audit Recommendation</label>
-                                  <select
-                                    value={executiveRecommendation}
-                                    onChange={(e) => setExecutiveRecommendation(e.target.value)}
-                                    className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white font-mono"
-                                  >
-                                    <option value="Approved">Approved (Certifications Authentic, Inventory Accurate)</option>
-                                    <option value="Needs Corrections">Needs Corrections (Fix expired stock, update labels)</option>
-                                    <option value="Rejected">Rejected (Fraudulent license, high risk factors)</option>
-                                  </select>
-                                </div>
-
-                                <div className="flex flex-col gap-1.5">
-                                  <label className="text-xs text-slate-400 font-medium">Verification Executive Assessment Notes</label>
-                                  <input 
-                                    type="text" 
-                                    placeholder="Type notes on drug legitimacy, storage conditions..."
-                                    value={executiveNotes}
-                                    onChange={(e) => setExecutiveNotes(e.target.value)}
-                                    className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white"
-                                  />
-                                </div>
-                              </div>
-
-                              <button
-                                type="submit"
-                                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-6 rounded-xl transition self-end"
-                              >
-                                Submit Audit Report to Admin Panel
-                              </button>
-                            </form>
+                            <div className="p-8 text-center border border-dashed border-slate-850 rounded-xl text-slate-500 text-[11px] font-mono">
+                              {execTab === 'active' ? 'No pending field assignments.' : 'No audit records in logs.'}
+                            </div>
                           )}
                         </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="py-12 border border-slate-800 border-dashed rounded-2xl text-center text-slate-500 text-xs">
-                      No visit assignments dispatched. Go to Command Center (Admin) to assign this Inspector.
-                    </div>
-                  )}
+
+                        {/* Right column: Audit Form or Submitted Report Viewer */}
+                        <div className="lg:col-span-2 flex flex-col gap-6">
+                          {activeAssignment ? (
+                            <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6">
+                              
+                              {execTab === 'past' || ['Under Admin Review', 'Approved & Verified', 'Rejected', 'Needs Corrections'].includes(activeAssignment.status) ? (
+                                <div className="flex flex-col gap-5 p-5 bg-slate-900 border border-slate-800 rounded-2xl animate-fade-in text-xs font-mono">
+                                  <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-3 border-b border-slate-800">
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 font-sans block">ONBOARDING REPORT IDENTIFIER</span>
+                                      <h4 className="text-sm font-bold text-slate-100 font-sans mt-0.5">Audit Questionnaire Submitted</h4>
+                                    </div>
+                                    <div className={`px-2.5 py-1 rounded text-[10px] font-bold border uppercase tracking-wider self-start sm:self-auto ${
+                                      activeAssignment.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                    }`}>
+                                      Status: {activeAssignment.status}
+                                    </div>
+                                  </div>
+
+                                  {matchedReport ? (
+                                    <div className="flex flex-col gap-4">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Inspected By</span>
+                                          <span className="font-bold text-slate-200 font-sans mt-0.5">{matchedReport.executiveName} (ID: {matchedReport.executiveId})</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Inspection Timestamp</span>
+                                          <span className="font-bold text-slate-200 mt-0.5">{new Date(matchedReport.createdAt).toLocaleString()}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Inspector Recommendation</span>
+                                          <span className={`font-bold mt-0.5 ${matchedReport.recommendation === 'Approved' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                            {matchedReport.recommendation}
+                                          </span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Cold Chain Verification</span>
+                                          <span className="font-bold text-slate-200 mt-0.5">{matchedReport.medicineQualityStatus === 'Pass' ? 'PASS (Shelving Verified)' : 'FAIL'}</span>
+                                        </div>
+                                      </div>
+
+                                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850">
+                                        <span className="text-[9px] text-slate-500 block uppercase mb-1.5">Inspector Checklist Evaluation</span>
+                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[9px] font-sans">
+                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
+                                            {matchedReport.certificationStatus === 'Pass' ? (
+                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                            ) : (
+                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                                            )}
+                                            <span>DL & GST Verified</span>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
+                                            {matchedReport.medicineQualityStatus === 'Pass' ? (
+                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                            ) : (
+                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                                            )}
+                                            <span>Cold Chain & Quality Checks</span>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
+                                            {matchedReport.inventorySetupStatus === 'Completed' ? (
+                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                            ) : (
+                                              <AlertCircle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
+                                            )}
+                                            <span>Barcode & Billing Setup</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      {matchedReport.complianceNotes && (
+                                        <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                                          <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Notes & Compliance Assessments</span>
+                                          <p className="text-slate-300 italic text-[11px] leading-relaxed">"{matchedReport.complianceNotes}"</p>
+                                        </div>
+                                      )}
+                                    </div>
+                                  ) : (
+                                    <p className="text-xs text-slate-400 leading-relaxed font-sans">
+                                      Physical audit checklist submitted. Waiting for SuperAdmin command center to synchronize the detailed questionnaire records.
+                                    </p>
+                                  )}
+                                </div>
+                              ) : (
+                                <form onSubmit={handleExecReportSubmit} className="flex flex-col gap-6 font-sans">
+                                  <div>
+                                    <span className="text-[9px] font-mono text-slate-500 uppercase">PHYSICAL INSPECTION PROTOCOL</span>
+                                    <h3 className="text-sm font-bold text-slate-100 mt-1">Audit Questionnaire: {activeAssignment.name}</h3>
+                                    <p className="text-xs text-slate-400">Complete legal, clinical, and technical parameters during store inspection.</p>
+                                  </div>
+
+                                  {/* Certification Audit */}
+                                  <div className="flex flex-col gap-3">
+                                    <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">A. Certification & Legal Verification</span>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                        <input 
+                                          type="checkbox"
+                                          checked={checklist.licenceVerified}
+                                          onChange={(e) => setChecklist({ ...checklist, licenceVerified: e.target.checked })}
+                                          className="w-4 h-4 accent-indigo-500 rounded"
+                                        />
+                                        <span>Drug License DL Authenticity Verified</span>
+                                      </label>
+                                      <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                        <input 
+                                          type="checkbox"
+                                          checked={checklist.gstVerified}
+                                          onChange={(e) => setChecklist({ ...checklist, gstVerified: e.target.checked })}
+                                          className="w-4 h-4 accent-indigo-500 rounded"
+                                        />
+                                        <span>GST Certificate matches state records</span>
+                                      </label>
+                                    </div>
+                                  </div>
+
+                                  {/* Medicine Quality Audit */}
+                                  <div className="flex flex-col gap-3">
+                                    <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">B. Medicine Quality & Safety Verification</span>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                        <input 
+                                          type="checkbox"
+                                          checked={checklist.qualityChecked}
+                                          onChange={(e) => setChecklist({ ...checklist, qualityChecked: e.target.checked })}
+                                          className="w-4 h-4 accent-indigo-500 rounded"
+                                        />
+                                        <span>Storage temperature check passed (2-8°C/Cold Chain)</span>
+                                      </label>
+                                      <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                        <input 
+                                          type="checkbox"
+                                          checked={checklist.noExpiredStock}
+                                          onChange={(e) => setChecklist({ ...checklist, noExpiredStock: e.target.checked })}
+                                          className="w-4 h-4 accent-indigo-500 rounded"
+                                        />
+                                        <span>Inspected drug shelves (Zero Expired SKU found)</span>
+                                      </label>
+                                    </div>
+                                  </div>
+
+                                  {/* Technical & Inventory Setup */}
+                                  <div className="flex flex-col gap-3">
+                                    <span className="text-xs font-bold text-teal-400 font-mono border-b border-slate-800 pb-1.5">C. Technical & Inventory Setup</span>
+                                    <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                                      <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                        <input 
+                                          type="checkbox"
+                                          checked={checklist.barcodeConfigured}
+                                          onChange={(e) => setChecklist({ ...checklist, barcodeConfigured: e.target.checked })}
+                                          className="w-4 h-4 accent-indigo-500 rounded"
+                                        />
+                                        <span>MedSafe barcode scanner calibrated</span>
+                                      </label>
+                                      <label className="flex items-center gap-3 p-3 bg-slate-900/60 border border-slate-800 hover:border-slate-700 rounded-xl text-xs text-slate-300 cursor-pointer">
+                                        <input 
+                                          type="checkbox"
+                                          checked={checklist.billingSynced}
+                                          onChange={(e) => setChecklist({ ...checklist, billingSynced: e.target.checked })}
+                                          className="w-4 h-4 accent-indigo-500 rounded"
+                                        />
+                                        <span>Billing Sync API integrator successfully linked</span>
+                                      </label>
+                                    </div>
+                                  </div>
+
+                                  {/* Verification Recommendation */}
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                                    <div className="flex flex-col gap-1.5">
+                                      <label className="text-xs text-slate-400 font-medium">Final Audit Recommendation</label>
+                                      <select
+                                        value={executiveRecommendation}
+                                        onChange={(e) => setExecutiveRecommendation(e.target.value)}
+                                        className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white font-mono"
+                                      >
+                                        <option value="Approved">Approved (Certifications Authentic, Inventory Accurate)</option>
+                                        <option value="Needs Corrections">Needs Corrections (Fix expired stock, update labels)</option>
+                                        <option value="Rejected">Rejected (Fraudulent license, high risk factors)</option>
+                                      </select>
+                                    </div>
+
+                                    <div className="flex flex-col gap-1.5">
+                                      <label className="text-xs text-slate-400 font-medium">Verification Executive Assessment Notes</label>
+                                      <input 
+                                        type="text" 
+                                        placeholder="Type notes on drug legitimacy, storage conditions..."
+                                        value={executiveNotes}
+                                        onChange={(e) => setExecutiveNotes(e.target.value)}
+                                        className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white"
+                                      />
+                                    </div>
+                                  </div>
+
+                                  <button
+                                    type="submit"
+                                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-6 rounded-xl transition self-end font-sans"
+                                  >
+                                    Submit Audit Report to Admin Panel
+                                  </button>
+                                </form>
+                              )}
+                            </div>
+                          ) : (
+                            <div className="h-[450px] flex flex-col items-center justify-center border border-dashed border-slate-800 bg-slate-950/40 rounded-2xl text-center p-8 gap-3">
+                              <div className="p-4 bg-slate-900 rounded-full border border-slate-800 text-slate-500">
+                                {execTab === 'active' ? (
+                                  <ClipboardList className="w-8 h-8 text-indigo-500/70" />
+                                ) : (
+                                  <History className="w-8 h-8 text-emerald-500/70" />
+                                )}
+                              </div>
+                              <h4 className="text-sm font-bold text-slate-300">
+                                {execTab === 'active' ? 'No Task Selected' : 'No Report Selected'}
+                              </h4>
+                              <p className="text-xs text-slate-500 max-w-xs leading-relaxed">
+                                {execTab === 'active' 
+                                  ? 'Select an active field task from the left list to fill out and submit the verification checklist.' 
+                                  : 'Select a completed store from the left list to review its submitted report details, recommendation, and compliance history.'}
+                              </p>
+                            </div>
+                          )}
+                        </div>
+
+                      </div>
+                    ) : (
+                      <div className="py-12 border border-slate-800 border-dashed rounded-2xl text-center text-slate-500 text-xs">
+                        No visit assignments dispatched. Go to Command Center (Admin) to assign this Inspector.
+                      </div>
+                    );
+                  })()}
                 </div>
               )}
 
@@ -2791,6 +3073,7 @@ export default function App() {
           </div>
         </div>
       )}
+
     </div>
   );
 }

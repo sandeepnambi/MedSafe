@@ -266,6 +266,14 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     return store;
   }
 
+  if (endpoint === '/pharmacies/my-complaints') {
+    const user = getLoggedInUser();
+    if (!user) throw new Error('Unauthorized');
+    const store = pharmacies.find(p => p.ownerId === user._id);
+    if (!store) return [];
+    return complaints.filter(c => c.pharmacyId === store._id);
+  }
+
   if (endpoint === '/pharmacies' && method === 'POST') {
     const user = getLoggedInUser();
     const newStore = {
@@ -384,6 +392,10 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     return pharmacies;
   }
 
+  if (endpoint === '/admin/users') {
+    return users;
+  }
+
   if (endpoint === '/admin/assign-executive' && method === 'POST') {
     const { pharmacyId, executiveId, visitDate } = body;
     const idx = pharmacies.findIndex(p => p._id === pharmacyId);
@@ -431,8 +443,14 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     return pharmacies.filter(p => p.assignedExecutiveId === userId || p.status === 'Verification In Progress');
   }
 
+  if (endpoint === '/executive/reports') {
+    const user = getLoggedInUser();
+    const userId = user?._id || user?.id;
+    return reports.filter(r => r.executiveId === userId);
+  }
+
   if (endpoint === '/executive/submit-report' && method === 'POST') {
-    const { pharmacyId, recommendation, complianceNotes } = body;
+    const { pharmacyId, recommendation, complianceNotes, certificationStatus, medicineQualityStatus, inventorySetupStatus } = body;
     const user = getLoggedInUser();
     const userId = user?._id || user?.id;
     
@@ -443,6 +461,9 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
       executiveName: user?.name || 'Vikram',
       recommendation,
       complianceNotes,
+      certificationStatus: certificationStatus || 'Pass',
+      medicineQualityStatus: medicineQualityStatus || 'Pass',
+      inventorySetupStatus: inventorySetupStatus || 'Completed',
       createdAt: new Date().toISOString()
     };
     reports.push(newReport);
@@ -459,6 +480,10 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
   }
 
   // Customer Router
+  if (endpoint === '/customer/pharmacies') {
+    return pharmacies.filter(p => p.status === 'Approved & Verified');
+  }
+
   if (endpoint.startsWith('/customer/search')) {
     const urlParams = new URLSearchParams(endpoint.split('?')[1]);
     const query = urlParams.get('query') || '';

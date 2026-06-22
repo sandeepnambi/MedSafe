@@ -474,6 +474,17 @@ app.post('/api/executive/submit-report', authenticateToken, requireRole(['execut
   }
 });
 
+// List reports submitted by the logged-in executive
+app.get('/api/executive/reports', authenticateToken, requireRole(['executive']), async (req, res) => {
+  try {
+    const VerificationReport = getModel('VerificationReport');
+    const list = await VerificationReport.find({ executiveId: req.user.id });
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Reports retrieval failed', error: error.message });
+  }
+});
+
 // ----------------- Admin Console API -----------------
 
 // List all stores
@@ -495,6 +506,17 @@ app.get('/api/admin/executives', authenticateToken, requireRole(['admin']), asyn
     res.json(list);
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch executives', error: error.message });
+  }
+});
+
+// List all registered platform users
+app.get('/api/admin/users', authenticateToken, requireRole(['admin']), async (req, res) => {
+  try {
+    const User = getModel('User');
+    const list = await User.find({}, '_id name email role createdAt');
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch users', error: error.message });
   }
 });
 
@@ -645,6 +667,20 @@ app.post('/api/admin/complaints/adjudicate', authenticateToken, requireRole(['ad
   }
 });
 
+// Fetch complaints/disputes against own pharmacy
+app.get('/api/pharmacies/my-complaints', authenticateToken, requireRole(['pharmacy']), async (req, res) => {
+  try {
+    const Pharmacy = getModel('Pharmacy');
+    const Complaint = getModel('Complaint');
+    const store = await Pharmacy.findOne({ ownerId: req.user.id });
+    if (!store) return res.status(404).json({ message: 'Pharmacy store not found' });
+    const list = await Complaint.find({ pharmacyId: String(store._id) });
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch complaints', error: error.message });
+  }
+});
+
 // ----------------- Pharmacy Respond Complaint API -----------------
 app.post('/api/pharmacies/respond-complaint', authenticateToken, requireRole(['pharmacy']), async (req, res) => {
   try {
@@ -662,6 +698,17 @@ app.post('/api/pharmacies/respond-complaint', authenticateToken, requireRole(['p
 });
 
 // ----------------- Customer Pharmacy API -----------------
+
+// List all approved & verified pharmacies
+app.get('/api/customer/pharmacies', authenticateToken, requireRole(['customer', 'admin']), async (req, res) => {
+  try {
+    const Pharmacy = getModel('Pharmacy');
+    const list = await Pharmacy.find({ status: 'Approved & Verified' });
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch pharmacies', error: error.message });
+  }
+});
 
 // Geolocation-Based & Price-Comparing Search (Customer Feature)
 app.get('/api/customer/search', async (req, res) => {
