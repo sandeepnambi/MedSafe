@@ -63,6 +63,53 @@ const logAuditAction = async (actorId, actorName, actorRole, action, targetId, d
   }
 };
 
+// Calculate dynamic trust score based on warnings, pending disputes, and inventory sync status
+const calculateDynamicTrustScore = async (store) => {
+  const Complaint = getModel('Complaint');
+  const Inventory = getModel('Inventory');
+
+  let score = 100;
+
+  // Warning Points: Each warning deducts 20 points
+  score -= (store.warningsCount || 0) * 20;
+
+  // Active/Pending Disputes: Each active pending dispute deducts 10 points
+  const pendingCount = await Complaint.countDocuments({
+    pharmacyId: String(store._id),
+    status: 'Pending'
+  });
+  score -= pendingCount * 10;
+
+  // Inventory Sync Compliance:
+  // If store is Approved & Verified, it must have active products.
+  // If it has 0 items synced, deduct 15 points.
+  // If it has > 0 and < 5 items, deduct 5 points.
+  if (store.status === 'Approved & Verified' || store.isLaunched) {
+    const inventoryCount = await Inventory.countDocuments({
+      pharmacyId: String(store._id)
+    });
+    if (inventoryCount === 0) {
+      score -= 15;
+    } else if (inventoryCount < 5) {
+      score -= 5;
+    }
+  }
+
+  return Math.max(0, Math.min(100, score));
+};
+
+const enrichPharmacyWithDynamicFields = async (store) => {
+  if (!store) return null;
+  const storeObj = store.toObject ? store.toObject() : store;
+  storeObj.trustScore = await calculateDynamicTrustScore(storeObj);
+  return storeObj;
+};
+
+const enrichPharmacyList = async (list) => {
+  if (!list || !Array.isArray(list)) return [];
+  return await Promise.all(list.map(store => enrichPharmacyWithDynamicFields(store)));
+};
+
 // ----------------- Auth API -----------------
 app.post('/api/auth/register', async (req, res) => {
   try {
@@ -239,7 +286,7 @@ app.get('/api/pharmacies/my-store', authenticateToken, requireRole(['pharmacy'])
     const Pharmacy = getModel('Pharmacy');
     const store = await Pharmacy.findOne({ ownerId: req.user.id });
     if (!store) return res.status(404).json({ message: 'No store found for this user.' });
-    res.json(store);
+    res.json(await enrichPharmacyWithDynamicFields(store));
   } catch (error) {
     res.status(500).json({ message: 'Retrieval failed', error: error.message });
   }
@@ -267,7 +314,7 @@ app.post('/api/pharmacies/launch', authenticateToken, requireRole(['pharmacy']),
     await store.save();
 
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'STORE_LAUNCHED', store._id, `Store launched live: ${store.name}`);
-    res.json(store);
+    res.json(await enrichPharmacyWithDynamicFields(store));
   } catch (error) {
     res.status(500).json({ message: 'Launch failed', error: error.message });
   }
@@ -295,7 +342,7 @@ app.post('/api/pharmacies/request-verification', authenticateToken, requireRole(
 
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'VERIFICATION_REQUESTED', store._id, `Requested executive setup for: ${store.name}`);
 
-    res.json(updated);
+    res.json(await enrichPharmacyWithDynamicFields(updated));
   } catch (error) {
     res.status(500).json({ message: 'Verification request failed', error: error.message });
   }
@@ -430,7 +477,7 @@ app.get('/api/executive/assignments', authenticateToken, requireRole(['executive
     // Filter by assigned executive ID or return all in-progress if admin
     const filter = req.user.role === 'admin' ? { status: 'Verification In Progress' } : { assignedExecutiveId: req.user.id };
     const list = await Pharmacy.find(filter);
-    res.json(list);
+    res.json(await enrichPharmacyList(list));
   } catch (error) {
     res.status(500).json({ message: 'Assignments retrieval failed', error: error.message });
   }
@@ -492,7 +539,7 @@ app.get('/api/admin/pharmacies', authenticateToken, requireRole(['admin']), asyn
   try {
     const Pharmacy = getModel('Pharmacy');
     const list = await Pharmacy.find({});
-    res.json(list);
+    res.json(await enrichPharmacyList(list));
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch pharmacies', error: error.message });
   }
@@ -543,7 +590,7 @@ app.post('/api/admin/assign-executive', authenticateToken, requireRole(['admin']
 
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'EXECUTIVE_ASSIGNED', pharmacyId, `Assigned Verification Executive ${execUser.name} to visit on ${visitDate}`);
 
-    res.json(updated);
+    res.json(await enrichPharmacyWithDynamicFields(updated));
   } catch (error) {
     res.status(500).json({ message: 'Assignment failed', error: error.message });
   }
@@ -571,7 +618,7 @@ app.post('/api/admin/approve-pharmacy', authenticateToken, requireRole(['admin']
 
     await logAuditAction(req.user.id, req.user.name, req.user.role, 'PHARMACY_STATUS_DECISION', pharmacyId, `Pharmacy ${updated.name} decision: ${targetStatus}. Comments: ${comments || 'None'}`);
 
-    res.json(updated);
+    res.json(await enrichPharmacyWithDynamicFields(updated));
   } catch (error) {
     res.status(500).json({ message: 'Approval review process failed', error: error.message });
   }
@@ -620,6 +667,10 @@ app.post('/api/admin/complaints/adjudicate', authenticateToken, requireRole(['ad
 
     const complaint = await Complaint.findById(complaintId);
     if (!complaint) return res.status(404).json({ message: 'Complaint not found' });
+
+    if (!complaint.responseFromPharmacy) {
+      return res.status(400).json({ message: 'Cannot adjudicate complaint before store owner has submitted a response/appeal' });
+    }
 
     if (action === 'penalize') {
       const store = await Pharmacy.findById(complaint.pharmacyId);
@@ -704,7 +755,7 @@ app.get('/api/customer/pharmacies', authenticateToken, requireRole(['customer', 
   try {
     const Pharmacy = getModel('Pharmacy');
     const list = await Pharmacy.find({ status: 'Approved & Verified' });
-    res.json(list);
+    res.json(await enrichPharmacyList(list));
   } catch (error) {
     res.status(500).json({ message: 'Failed to fetch pharmacies', error: error.message });
   }
@@ -719,7 +770,8 @@ app.get('/api/customer/search', async (req, res) => {
     const Medicine = getModel('Medicine');
 
     // Only search within verified and launched pharmacies
-    const verifiedStores = await Pharmacy.find({ status: 'Approved & Verified', isLaunched: true });
+    const verifiedStoresRaw = await Pharmacy.find({ status: 'Approved & Verified', isLaunched: true });
+    const verifiedStores = await enrichPharmacyList(verifiedStoresRaw);
     const verifiedStoreIds = verifiedStores.map(store => store._id);
 
     // Find matching medicines (name, generic name, salt composition)

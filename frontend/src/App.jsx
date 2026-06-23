@@ -50,6 +50,7 @@ export default function App() {
   const [recommendations, setRecommendations] = useState(null);
   const [selectedResults, setSelectedResults] = useState([]);
   const [myComplaints, setMyComplaints] = useState([]);
+  const [verifiedPharmacies, setVerifiedPharmacies] = useState([]);
   const [complaintPharmacyId, setComplaintPharmacyId] = useState('');
   const [complaintType, setComplaintType] = useState('Price Mismatch');
   const [complaintDesc, setComplaintDesc] = useState('');
@@ -192,13 +193,25 @@ export default function App() {
   const [adminLogs, setAdminLogs] = useState([]);
   const [adminExecutives, setAdminExecutives] = useState([]);
   const [adminUsers, setAdminUsers] = useState([]);
-  const [adminTab, setAdminTab] = useState('command'); // command, people, stores
-  const [selectedUserDetail, setSelectedUserDetail] = useState(null);
-  const [selectedStoreDetail, setSelectedStoreDetail] = useState(null);
+  const [adminTab, setAdminTab] = useState('analytics'); // analytics, deployment, audits, disputes, directory, logs
+  const [disputesSubTab, setDisputesSubTab] = useState('active'); // active, past
+  const [auditsSubTab, setAuditsSubTab] = useState('present'); // present, past
+  const [adminReviewComments, setAdminReviewComments] = useState({});
+  const [directoryTab, setDirectoryTab] = useState('all'); // all, customer, pharmacy, executive, stores, admin
+  const [directorySearch, setDirectorySearch] = useState('');
+  const [selectedDirectoryItem, setSelectedDirectoryItem] = useState(null);
+  const [adminSelectedDispute, setAdminSelectedDispute] = useState(null);
   const [assigningStoreId, setAssigningStoreId] = useState('');
   const [assigningExecId, setAssigningExecId] = useState(''); // default empty
   const [assigningDate, setAssigningDate] = useState('2026-05-30');
   const [showVerificationConfirmModal, setShowVerificationConfirmModal] = useState(false);
+
+  // Additional refactoring states
+  const [selectedDisputeDetail, setSelectedDisputeDetail] = useState(null);
+  const [pharmacyTab, setPharmacyTab] = useState('analytics'); // analytics, disputes
+  const [pharmacyComplaints, setPharmacyComplaints] = useState([]);
+  const [pharmacyDisputesSubTab, setPharmacyDisputesSubTab] = useState('active'); // active, past
+  const [ownerReplyText, setOwnerReplyText] = useState({});
 
   // Simulated Mobile App States
   const [mobileScreen, setMobileScreen] = useState('home'); // home, search, barcode, scan_bill, checklist_step
@@ -406,6 +419,9 @@ export default function App() {
     try {
       const data = await api.get('/customer/my-complaints');
       setMyComplaints(data || []);
+      
+      const stores = await api.get('/customer/pharmacies');
+      setVerifiedPharmacies(stores || []);
     } catch (err) {
       console.error('Failed to load complaints:', err);
     }
@@ -526,12 +542,38 @@ export default function App() {
         // Fetch all global medicines
         const allMeds = await api.get('/medicines');
         setAllMedicines(allMeds || []);
+
+        // Fetch disputes against pharmacy
+        const comps = await api.get('/pharmacies/my-complaints');
+        setPharmacyComplaints(comps || []);
       }
     } catch (err) {
       console.error('loadPharmacyData failed:', err);
       if (err.message && (err.message.includes('not found') || err.message.includes('Unauthorized') || err.message.includes('credentials') || err.message.includes('404') || err.message.includes('401'))) {
         setMyPharmacy(null);
       }
+    }
+  };
+
+  const handlePharmacyRespondComplaint = async (complaintId) => {
+    const responseText = ownerReplyText[complaintId];
+    if (!responseText || !responseText.trim()) {
+      triggerNotification('Please type a response before submitting.', 'warning');
+      return;
+    }
+    setLoading(true);
+    try {
+      await api.post('/pharmacies/respond-complaint', {
+        complaintId,
+        response: responseText
+      });
+      triggerNotification('Response submitted successfully to customer file.');
+      setOwnerReplyText(prev => ({ ...prev, [complaintId]: '' }));
+      await loadPharmacyData();
+    } catch (err) {
+      triggerNotification(err.message || 'Failed to submit response', 'error');
+    } finally {
+      setLoading(false);
     }
   };
 
@@ -729,14 +771,19 @@ export default function App() {
   };
 
   // Admin Grants final Onboard Approval (Step 6)
-  const handleAdminApprovePharmacy = async (id, decision) => {
+  const handleAdminApprovePharmacy = async (id, decision, customComments) => {
     try {
       await api.post('/admin/approve-pharmacy', {
         pharmacyId: id,
         decision,
-        comments: 'Verified by Inspector on physical drug licensing authenticity check.'
+        comments: customComments || 'Verified by Inspector on physical drug licensing authenticity check.'
       });
       triggerNotification(`Pharmacy review completed: ${decision.toUpperCase()}`);
+      setAdminReviewComments(prev => {
+        const copy = { ...prev };
+        delete copy[id];
+        return copy;
+      });
       loadAdminData();
     } catch (err) {
       triggerNotification(err.message, 'error');
@@ -1621,15 +1668,16 @@ export default function App() {
                                   className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs focus:outline-none text-white font-sans"
                                 >
                                   <option value="">-- Choose Pharmacy --</option>
-                                  <option value="p1">Wellness Forever Pharmacy</option>
-                                  <option value="p2">LifeCare Chemist & Druggist</option>
+                                  {verifiedPharmacies.map(store => (
+                                    <option key={store._id} value={store._id}>{store.name}</option>
+                                  ))}
                                 </select>
                               </div>
                               <div className="flex flex-col gap-1.5">
                                 <label className="text-xs text-slate-400">Report Category</label>
                                 <select
                                   value={complaintType}
-                                  onChange={(e) => { setCustomerTab('discovery'); setComplaintType(e.target.value); }}
+                                  onChange={(e) => { setComplaintType(e.target.value); }}
                                   className="bg-slate-900 border border-slate-700 rounded-xl p-3 text-xs focus:outline-none text-white font-sans"
                                 >
                                   <option value="Price Mismatch">Price Mismatch</option>
@@ -1718,7 +1766,7 @@ export default function App() {
                             <div className="absolute top-0 right-0 w-16 h-16 bg-amber-500/5 rounded-full blur-xl"></div>
                             <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider block">ACTIVE DISPUTES</span>
                             <span className="text-sm font-bold text-slate-100 mt-1 font-mono">
-                              {myComplaints.length} Lodged Tickets
+                              {myComplaints.filter(c => c.status === 'Pending').length} Active Tickets
                             </span>
                             <p className="text-[10px] text-slate-500 mt-1">Track and resolve reported pharmacy pricing mismatches.</p>
                           </div>
@@ -1857,7 +1905,7 @@ export default function App() {
                                 </thead>
                                 <tbody>
                                   {myComplaints.map(comp => (
-                                    <tr key={comp._id} className="border-b border-slate-900 last:border-0 hover:bg-slate-900/30 transition">
+                                    <tr key={comp._id} onClick={() => setSelectedDisputeDetail(comp)} className="border-b border-slate-900 last:border-0 hover:bg-slate-900/30 cursor-pointer transition">
                                       <td className="py-3.5 px-4 font-bold text-slate-200">{comp.pharmacyName}</td>
                                       <td className="py-3.5 px-4">
                                         <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase ${
@@ -1873,9 +1921,12 @@ export default function App() {
                                         <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
                                           comp.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400' :
                                           comp.status === 'Dismissed' ? 'bg-slate-800 text-slate-400' :
+                                          comp.responseFromPharmacy ? 'bg-blue-500/10 text-blue-400' :
                                           'bg-amber-500/10 text-amber-400 animate-pulse'
                                         }`}>
-                                          {comp.status}
+                                          {comp.status === 'Pending'
+                                            ? (comp.responseFromPharmacy ? 'Under Admin Review' : 'Awaiting Store Response')
+                                            : comp.status}
                                         </span>
                                       </td>
                                       <td className="py-3.5 px-4 text-right font-mono text-[10px] text-slate-500">
@@ -1910,189 +1961,47 @@ export default function App() {
                 </div>
               )}
 
-              {/* ==================== 2. PHARMACY DESK PORTAL ==================== */}
               {activeRole === 'pharmacy' && (
                 <div className="flex flex-col gap-8">
-                  
-                  {/* Status Banner */}
-                  {myPharmacy ? (
-                    <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                      <div className="flex items-center justify-between flex-wrap gap-4">
-                        <div>
-                          <span className="text-[10px] font-mono text-slate-500">PHARMACY ONBOARDING ID: {myPharmacy._id}</span>
-                          <h2 className="text-base font-bold text-slate-100 mt-1 flex items-center gap-2">
-                            {myPharmacy.name}
-                            {myPharmacy.isLaunched && (
-                              <div className="relative inline-flex items-center justify-center bg-red-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded shadow-sm tracking-widest leading-none mr-2 font-mono ml-1.5 select-none">
-                                LIVE
-                                <div className="absolute -top-1.5 -right-2 bg-white rounded-full p-[1px] shadow-sm border border-red-200 flex items-center justify-center">
-                                  <span className="relative flex h-2.5 w-2.5">
-                                    <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                    <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-650 items-center justify-center">
-                                      <Radio className="w-1.5 h-1.5 text-white" />
-                                    </span>
-                                  </span>
-                                </div>
-                              </div>
-                            )}
-                          </h2>
-                          <p className="text-xs text-slate-400">{myPharmacy.address}</p>
-                          {myPharmacy.assignedExecutiveName && (
-                            <div className="mt-3 flex items-center gap-2 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl w-fit">
-                              <User className="w-3.5 h-3.5 text-indigo-600" />
-                              <span>
-                                Deployed Inspector: <strong className="text-indigo-950">{myPharmacy.assignedExecutiveName}</strong> 
-                                {myPharmacy.visitScheduleDate && ` (Scheduled: ${myPharmacy.visitScheduleDate})`}
-                              </span>
-                            </div>
-                          )}
-                        </div>
-                        
-                        {/* Onboarding Stage Badging */}
-                        <div className="flex flex-col items-end gap-1.5">
-                          <div className={`px-4 py-2 rounded-xl text-xs font-bold border ${
-                            myPharmacy.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 glow-verified' :
-                            myPharmacy.status === 'Verification Requested' ? 'bg-blue-500/10 border-blue-500 text-blue-400' :
-                            myPharmacy.status === 'Executive Assigned' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400 animate-pulse' :
-                            'bg-amber-500/10 border-amber-500 text-amber-400'
-                          }`}>
-                            {myPharmacy.status}
-                          </div>
-                        </div>
-                      </div>
-
-                      {/* Onboarding Workflow Pipeline tracker */}
-                      <div className="mt-4">
-                        <h3 className="text-xs font-bold font-mono text-slate-400 mb-6 uppercase tracking-wider">Pharmacy Activation Timeline</h3>
-                        
-                        {/* Stepper Timeline */}
-                        <div className="grid grid-cols-4 gap-2 relative">
-                          <div className="absolute top-3 left-6 right-6 h-[2px] bg-slate-800 -z-10"></div>
-                          
-                          {[
-                            {step: 'Register', active: true, desc: 'Store details & licenses uploaded'},
-                            {step: 'Setup Request', active: ['Verification Requested', 'Executive Assigned', 'Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status), desc: 'Booked physical audit'},
-                            {step: 'Physical Audit', active: myPharmacy.status === 'Approved & Verified', desc: 'Inspector checklist sync'},
-                            {step: 'Verified Badge', active: myPharmacy.status === 'Approved & Verified', desc: 'Public pricing live'}
-                          ].map((s, idx) => (
-                            <div key={idx} className="flex flex-col items-center text-center px-1">
-                              <div className={`w-7 h-7 rounded-full flex items-center justify-center border font-mono text-xs font-bold transition duration-300 ${
-                                s.active ? 'bg-teal-500 border-teal-500 text-white shadow-lg shadow-teal-500/20' : 'bg-slate-900 border-slate-800 text-slate-500'
-                              }`}>
-                                {s.active ? <Check className="w-3.5 h-3.5" /> : idx + 1}
-                              </div>
-                              <span className={`text-xs mt-1.5 font-bold transition ${s.active ? 'text-slate-100' : 'text-slate-500'}`}>{s.step}</span>
-                              <span className="text-[8px] text-slate-500 mt-1 hidden md:block">{s.desc}</span>
-                            </div>
-                          ))}
-                        </div>
-                      </div>
-
-                      {myPharmacy.status === 'Approved & Verified' && !myPharmacy.isLaunched && (
-                        <div className="mt-4 bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-center justify-between flex-wrap gap-4 text-xs text-emerald-800">
-                          <div className="flex items-start gap-3">
-                            <Check className="w-5 h-5 flex-shrink-0 text-emerald-600 mt-0.5" />
-                            <div>
-                              <strong className="block text-emerald-900 font-bold mb-1">Store Verification Complete!</strong>
-                              Your store has been verified by our Deployed Inspector and approved by the SuperAdmin. Click below to launch your store online and become visible to customers.
-                            </div>
-                          </div>
-                          <button
-                            onClick={handleLaunchStore}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs px-6 py-2.5 rounded-xl transition"
-                          >
-                            Launch Store & Go Live
-                          </button>
-                        </div>
-                      )}
-
-                      {/* If pending request, or rejected/correction required, let store initiate Verification Request */}
-                      {['Pending Verification Request', 'Needs Corrections', 'Rejected'].includes(myPharmacy.status) && (
-                        <div className="mt-6 border-t border-slate-800 pt-6 flex flex-col gap-4">
-                          {['Needs Corrections', 'Rejected'].includes(myPharmacy.status) && (
-                            <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl text-xs text-rose-800 mb-2">
-                              <strong className="block text-rose-900 font-bold mb-1">Attention: Onboarding Request Declined</strong>
-                              Reason: <span className="italic text-rose-700 font-semibold">"{myPharmacy.adminComments || 'No details provided.'}"</span>. Please update your details and resubmit the verification request.
-                            </div>
-                          )}
-                          <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 p-4 rounded-xl text-xs text-amber-800">
-                            <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-600" />
-                            <div>
-                              <strong className="block text-amber-900 font-bold mb-1">Required: Setup Assistance & Onboarding Request</strong>
-                              Your pharmacy profile is registered offline, but cannot sell or be discovered until an official app-side Verification Executive physically visits your store to perform compliance checks, document verification, and configure barcode scanner systems.
-                            </div>
-                          </div>
-
-                          <form onSubmit={handleRequestVerification} className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[10px] text-slate-400 font-mono">Preferred Visit Date</label>
-                              <input 
-                                type="date" 
-                                value={scheduleForm.preferredVisitDate}
-                                onChange={(e) => setScheduleForm({ ...scheduleForm, preferredVisitDate: e.target.value })}
-                                className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
-                              />
-                            </div>
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[10px] text-slate-400 font-mono">Store Operational Timings</label>
-                              <input 
-                                type="text"
-                                placeholder="e.g. 9 AM - 10 PM"
-                                value={scheduleForm.storeTimings}
-                                onChange={(e) => setScheduleForm({ ...scheduleForm, storeTimings: e.target.value })}
-                                className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
-                              />
-                            </div>
-                            <div className="flex items-center gap-4 mt-2 flex-wrap">
-                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                                <input 
-                                  type="checkbox"
-                                  checked={scheduleForm.barcodeSystemAvailable}
-                                  onChange={(e) => setScheduleForm({ ...scheduleForm, barcodeSystemAvailable: e.target.checked })}
-                                  className="accent-teal-500"
-                                />
-                                Barcode Scanner Available
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                                <input 
-                                  type="checkbox"
-                                  checked={scheduleForm.billingSoftwareAvailable}
-                                  onChange={(e) => setScheduleForm({ ...scheduleForm, billingSoftwareAvailable: e.target.checked })}
-                                  className="accent-teal-500"
-                                />
-                                Billing Software Installed
-                              </label>
-                              <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
-                                <input 
-                                  type="checkbox"
-                                  checked={scheduleForm.debitCreditAvailable}
-                                  onChange={(e) => setScheduleForm({ ...scheduleForm, debitCreditAvailable: e.target.checked })}
-                                  className="accent-teal-500"
-                                />
-                                Debit/Credit Card Machine Installed
-                              </label>
-                            </div>
-                            <div className="md:col-span-2 flex flex-col gap-1">
-                              <label className="text-[10px] text-slate-400 font-mono">Setup Assistance Requirements</label>
-                              <textarea
-                                placeholder="Describe any technical assistance, training or barcode integrations required..."
-                                value={scheduleForm.setupAssistanceRequirements}
-                                onChange={(e) => setScheduleForm({ ...scheduleForm, setupAssistanceRequirements: e.target.value })}
-                                rows="2"
-                                className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
-                              />
-                            </div>
-                            <button
-                              type="submit"
-                              className="md:col-span-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-xs py-3 rounded-lg transition"
-                            >
-                              Request Physical Verification Visit
-                            </button>
-                          </form>
-                        </div>
-                      )}
+                  {myPharmacy && (
+                    <div className="flex gap-2 border-b border-slate-800 pb-px">
+                      <button
+                        onClick={() => setPharmacyTab('analytics')}
+                        className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                          pharmacyTab === 'analytics' 
+                            ? 'border-teal-500 text-teal-400' 
+                            : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <TrendingUp className="w-3.5 h-3.5" />
+                        Analytics
+                      </button>
+                      <button
+                        onClick={() => setPharmacyTab('inventory')}
+                        className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                          pharmacyTab === 'inventory' 
+                            ? 'border-teal-500 text-teal-400' 
+                            : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <ClipboardList className="w-3.5 h-3.5" />
+                        Inventory
+                      </button>
+                      <button
+                        onClick={() => setPharmacyTab('disputes')}
+                        className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                          pharmacyTab === 'disputes' 
+                            ? 'border-red-500 text-red-400' 
+                            : 'border-transparent text-slate-400 hover:text-slate-200'
+                        }`}
+                      >
+                        <AlertOctagon className="w-3.5 h-3.5" />
+                        Disputes & Appeals ({pharmacyComplaints.filter(c => c.status === 'Pending' && !c.responseFromPharmacy).length})
+                      </button>
                     </div>
-                  ) : (
+                  )}
+
+                  {!myPharmacy && (
                     /* Step 1: Register Profile form */
                     <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6">
                       <div>
@@ -2181,136 +2090,500 @@ export default function App() {
                     </div>
                   )}
 
-                  {/* Real-time Inventory management desk (If profile exists, even if unverified) */}
-                  {myPharmacy && !['Pending Verification Request', 'Verification Requested'].includes(myPharmacy.status) && (
-                    <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
-                      
-                      {/* Inventory Sync Card */}
+                  {myPharmacy && pharmacyTab === 'analytics' && (
+                    <>
+                      {/* Status Banner */}
                       <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2 font-mono">
-                          <RefreshCw className="w-4 h-4 text-teal-400" /> Automated Billing Sync
-                        </h3>
-                        <p className="text-xs text-slate-400">Connect your local retail pharmacy billing system (Tally, Marg, Medilite) to automatically synchronize catalog price levels and real-time stocks.</p>
-                        
-                        <div className="flex flex-col gap-3 mt-2">
-                          <div className="flex items-center gap-2">
-                            <input 
-                              type="text" 
-                              value={billingSoftwareName}
-                              onChange={(e) => setBillingSoftwareName(e.target.value)}
-                              className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg flex-1 text-slate-100 font-mono focus:outline-none focus:border-indigo-500 transition"
-                            />
-                            <button
-                              onClick={handleSyncBillingSystem}
-                              className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg text-xs font-bold transition"
-                            >
-                              Sync System
-                            </button>
+                        <div className="flex items-center justify-between flex-wrap gap-4">
+                          <div>
+                            <span className="text-[10px] font-mono text-slate-500">PHARMACY ONBOARDING ID: {myPharmacy._id}</span>
+                            <h2 className="text-base font-bold text-slate-100 mt-1 flex items-center gap-2">
+                              {myPharmacy.name}
+                              {myPharmacy.isLaunched && (
+                                <div className="relative inline-flex items-center justify-center bg-red-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded shadow-sm tracking-widest leading-none mr-2 font-mono ml-1.5 select-none">
+                                  LIVE
+                                  <div className="absolute -top-1.5 -right-2 bg-white rounded-full p-[1px] shadow-sm border border-red-200 flex items-center justify-center">
+                                    <span className="relative flex h-2.5 w-2.5">
+                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-650 items-center justify-center">
+                                        <Radio className="w-1.5 h-1.5 text-white" />
+                                      </span>
+                                    </span>
+                                  </div>
+                                </div>
+                              )}
+                            </h2>
+                            <p className="text-xs text-slate-400">{myPharmacy.address}</p>
+                            {myPharmacy.assignedExecutiveName && (
+                              <div className="mt-3 flex items-center gap-2 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl w-fit">
+                                <User className="w-3.5 h-3.5 text-indigo-600" />
+                                <span>
+                                  Deployed Inspector: <strong className="text-indigo-950">{myPharmacy.assignedExecutiveName}</strong> 
+                                  {myPharmacy.visitScheduleDate && ` (Scheduled: ${myPharmacy.visitScheduleDate})`}
+                                </span>
+                              </div>
+                            )}
                           </div>
                           
-                          <div className="text-[10px] text-slate-500 font-mono">
-                            Sync Status: <strong>{myPharmacy.inventoryUpdateFrequency === 'Real-time Integrator' ? 'LINKED (Real-time)' : 'DISCONNECTED'}</strong>
+                          {/* Onboarding Stage Badging */}
+                          <div className="flex flex-col items-end gap-1.5">
+                            <div className={`px-4 py-2 rounded-xl text-xs font-bold border ${
+                              myPharmacy.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500 text-emerald-400 glow-verified' :
+                              myPharmacy.status === 'Verification Requested' ? 'bg-blue-500/10 border-blue-500 text-blue-400' :
+                              myPharmacy.status === 'Executive Assigned' ? 'bg-indigo-500/10 border-indigo-500 text-indigo-400 animate-pulse' :
+                              'bg-amber-500/10 border-amber-500 text-amber-400'
+                            }`}>
+                              {myPharmacy.status}
+                            </div>
                           </div>
                         </div>
-                      </div>
 
-                      {/* Manual Medicine Entry */}
-                      <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2 font-mono">
-                          <Plus className="w-4 h-4 text-teal-400" /> Manual Stock Override
-                        </h3>
+                        {/* Onboarding Workflow Pipeline tracker */}
+                        <div className="mt-4">
+                          <h3 className="text-xs font-bold font-mono text-slate-400 mb-6 uppercase tracking-wider">Pharmacy Activation Timeline</h3>
+                          
+                          {/* Stepper Timeline */}
+                          <div className="grid grid-cols-4 gap-2 relative">
+                            <div className="absolute top-3 left-6 right-6 h-[2px] bg-slate-800 -z-10"></div>
+                            
+                            {[
+                              {step: 'Register', active: true, desc: 'Store details & licenses uploaded'},
+                              {step: 'Setup Request', active: ['Verification Requested', 'Executive Assigned', 'Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status), desc: 'Booked physical audit'},
+                              {step: 'Physical Audit', active: myPharmacy.status === 'Approved & Verified', desc: 'Inspector checklist sync'},
+                              {step: 'Verified Badge', active: myPharmacy.status === 'Approved & Verified', desc: 'Public pricing live'}
+                            ].map((s, idx) => (
+                              <div key={idx} className="flex flex-col items-center text-center px-1">
+                                <div className={`w-7 h-7 rounded-full flex items-center justify-center border font-mono text-xs font-bold transition duration-300 ${
+                                  s.active ? 'bg-teal-500 border-teal-500 text-white shadow-lg shadow-teal-500/20' : 'bg-slate-900 border-slate-800 text-slate-500'
+                                }`}>
+                                  {s.active ? <Check className="w-3.5 h-3.5" /> : idx + 1}
+                                </div>
+                                <span className={`text-xs mt-1.5 font-bold transition ${s.active ? 'text-slate-100' : 'text-slate-500'}`}>{s.step}</span>
+                                <span className="text-[8px] text-slate-500 mt-1 hidden md:block">{s.desc}</span>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
 
-                        <form onSubmit={handleAddInventory} className="flex flex-col gap-3">
-                          <div className="flex flex-col gap-1">
-                            <label className="text-[10px] text-slate-500 font-mono">Select Medicine</label>
-                            <select
-                              value={newInvItem.medicineId}
-                              onChange={(e) => setNewInvItem({ ...newInvItem, medicineId: e.target.value })}
-                              className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                        {myPharmacy.status === 'Approved & Verified' && !myPharmacy.isLaunched && (
+                          <div className="mt-4 bg-emerald-50 border border-emerald-200 p-4 rounded-xl flex items-center justify-between flex-wrap gap-4 text-xs text-emerald-800">
+                            <div className="flex items-start gap-3">
+                              <Check className="w-5 h-5 flex-shrink-0 text-emerald-600 mt-0.5" />
+                              <div>
+                                <strong className="block text-emerald-900 font-bold mb-1">Store Verification Complete!</strong>
+                                Your store has been verified by our Deployed Inspector and approved by the SuperAdmin. Click below to launch your store online and become visible to customers.
+                              </div>
+                            </div>
+                            <button
+                              onClick={handleLaunchStore}
+                              className="bg-emerald-600 hover:bg-emerald-500 text-white font-extrabold text-xs px-6 py-2.5 rounded-xl transition"
                             >
-                              <option value="">-- Choose Medicine --</option>
-                              {allMedicines.map(m => (
-                                <option key={m._id} value={m._id}>{m.name} ({m.genericName})</option>
-                              ))}
-                            </select>
+                              Launch Store & Go Live
+                            </button>
                           </div>
+                        )}
 
-                          <div className="grid grid-cols-2 gap-3">
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[10px] text-slate-500 font-mono">Price ($)</label>
-                              <input 
-                                type="number" 
-                                placeholder="Price"
-                                value={newInvItem.price}
-                                onChange={(e) => setNewInvItem({ ...newInvItem, price: e.target.value })}
-                                className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg text-slate-100 focus:outline-none focus:border-indigo-500 transition"
-                              />
+                        {/* If pending request, or rejected/correction required, let store initiate Verification Request */}
+                        {['Pending Verification Request', 'Needs Corrections', 'Rejected'].includes(myPharmacy.status) && (
+                          <div className="mt-6 border-t border-slate-800 pt-6 flex flex-col gap-4">
+                            {['Needs Corrections', 'Rejected'].includes(myPharmacy.status) && (
+                              <div className="bg-rose-50 border border-rose-200 p-4 rounded-xl text-xs text-rose-800 mb-2">
+                                <strong className="block text-rose-900 font-bold mb-1">Attention: Onboarding Request Declined</strong>
+                                Reason: <span className="italic text-rose-700 font-semibold">"{myPharmacy.adminComments || 'No details provided.'}"</span>. Please update your details and resubmit the verification request.
+                              </div>
+                            )}
+                            <div className="flex items-start gap-3 bg-amber-50 border border-amber-200 p-4 rounded-xl text-xs text-amber-800">
+                              <AlertCircle className="w-5 h-5 flex-shrink-0 text-amber-600" />
+                              <div>
+                                <strong className="block text-amber-900 font-bold mb-1">Required: Setup Assistance & Onboarding Request</strong>
+                                Your pharmacy profile is registered offline, but cannot sell or be discovered until an official app-side Verification Executive physically visits your store to perform compliance checks, document verification, and configure barcode scanner systems.
+                              </div>
                             </div>
-                            <div className="flex flex-col gap-1">
-                              <label className="text-[10px] text-slate-500 font-mono">Stock Quantity</label>
-                              <input 
-                                type="number" 
-                                placeholder="Stock count"
-                                value={newInvItem.stock}
-                                onChange={(e) => setNewInvItem({ ...newInvItem, stock: e.target.value })}
-                                className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg text-slate-100 focus:outline-none focus:border-indigo-500 transition"
-                              />
-                            </div>
-                          </div>
 
-                          <button
-                            type="submit"
-                            className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-2.5 px-4 rounded-lg mt-1 transition"
-                          >
-                            Update Stock Entry
-                          </button>
-                        </form>
-                      </div>
-
-                      {/* Display Current Live Inventory */}
-                      <div className="md:col-span-2 bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                        <div className="flex items-center justify-between">
-                          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                            <ClipboardList className="w-4 h-4 text-teal-400" /> Current Store Inventory Stock List
-                          </h3>
-                          <span className="text-[10px] font-mono text-slate-500">{pharmacyInventory.length} Active SKUs</span>
-                        </div>
-
-                        {pharmacyInventory.length > 0 ? (
-                          <div className="overflow-x-auto">
-                            <table className="w-full text-xs text-left text-slate-400">
-                              <thead className="text-[10px] uppercase bg-slate-900 text-slate-500 font-mono border-b border-slate-800">
-                                <tr>
-                                  <th className="py-3 px-4">Medicine name</th>
-                                  <th className="py-3 px-4">Listed Price</th>
-                                  <th className="py-3 px-4">Current Stock</th>
-                                  <th className="py-3 px-4">Availability</th>
-                                </tr>
-                              </thead>
-                              <tbody>
-                                {pharmacyInventory.map(item => (
-                                  <tr key={item._id} className="border-b border-slate-800 hover:bg-slate-900/50">
-                                    <td className="py-3 px-4 font-bold text-slate-200">{item.medicineName}</td>
-                                    <td className="py-3 px-4 text-teal-400 font-bold font-mono">${item.price}</td>
-                                    <td className="py-3 px-4 font-mono">{item.stock} units</td>
-                                    <td className="py-3 px-4">
-                                      <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                                        item.isAvailable ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
-                                      }`}>
-                                        {item.isAvailable ? 'IN STOCK' : 'OUT OF STOCK'}
-                                      </span>
-                                    </td>
-                                  </tr>
-                                ))}
-                              </tbody>
-                            </table>
-                          </div>
-                        ) : (
-                          <div className="py-8 text-center text-slate-500 text-xs border border-slate-900 border-dashed rounded-xl">
-                            Inventory is empty. Sync billing software above to populate medicines.
+                            <form onSubmit={handleRequestVerification} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-slate-400 font-mono">Preferred Visit Date</label>
+                                <input 
+                                  type="date" 
+                                  value={scheduleForm.preferredVisitDate}
+                                  onChange={(e) => setScheduleForm({ ...scheduleForm, preferredVisitDate: e.target.value })}
+                                  className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
+                                />
+                              </div>
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-slate-400 font-mono">Store Operational Timings</label>
+                                <input 
+                                  type="text"
+                                  placeholder="e.g. 9 AM - 10 PM"
+                                  value={scheduleForm.storeTimings}
+                                  onChange={(e) => setScheduleForm({ ...scheduleForm, storeTimings: e.target.value })}
+                                  className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
+                                />
+                              </div>
+                              <div className="flex items-center gap-4 mt-2 flex-wrap">
+                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                  <input 
+                                    type="checkbox"
+                                    checked={scheduleForm.barcodeSystemAvailable}
+                                    onChange={(e) => setScheduleForm({ ...scheduleForm, barcodeSystemAvailable: e.target.checked })}
+                                    className="accent-teal-500"
+                                  />
+                                  Barcode Scanner Available
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                  <input 
+                                    type="checkbox"
+                                    checked={scheduleForm.billingSoftwareAvailable}
+                                    onChange={(e) => setScheduleForm({ ...scheduleForm, billingSoftwareAvailable: e.target.checked })}
+                                    className="accent-teal-500"
+                                  />
+                                  Billing Software Installed
+                                </label>
+                                <label className="flex items-center gap-2 text-xs text-slate-300 cursor-pointer">
+                                  <input 
+                                    type="checkbox"
+                                    checked={scheduleForm.debitCreditAvailable}
+                                    onChange={(e) => setScheduleForm({ ...scheduleForm, debitCreditAvailable: e.target.checked })}
+                                    className="accent-teal-500"
+                                  />
+                                  Debit/Credit Card Machine Installed
+                                </label>
+                              </div>
+                              <div className="md:col-span-2 flex flex-col gap-1">
+                                <label className="text-[10px] text-slate-400 font-mono">Setup Assistance Requirements</label>
+                                <textarea
+                                  placeholder="Describe any technical assistance, training or barcode integrations required..."
+                                  value={scheduleForm.setupAssistanceRequirements}
+                                  onChange={(e) => setScheduleForm({ ...scheduleForm, setupAssistanceRequirements: e.target.value })}
+                                  rows="2"
+                                  className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-white"
+                                />
+                              </div>
+                              <button
+                                type="submit"
+                                className="md:col-span-2 bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-xs py-3 rounded-lg transition"
+                              >
+                                Request Physical Verification Visit
+                              </button>
+                            </form>
                           </div>
                         )}
                       </div>
+
+                      {/* Store Analytics Graphs & Cards */}
+                      {(() => {
+                        const inventoryChartData = pharmacyInventory.slice(0, 8).map(item => ({
+                          name: item.medicineName.split(' ')[0],
+                          stock: item.stock,
+                          price: item.price
+                        }));
+                        return (
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 animate-fade-in">
+                            {/* KPI Column */}
+                            <div className="lg:col-span-1 flex flex-col gap-4">
+                              <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col gap-1 relative overflow-hidden">
+                                <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">Store Trust Index</span>
+                                <span className="text-xl font-bold text-teal-400 font-mono mt-1">{myPharmacy.trustScore || 100}%</span>
+                                <span className="text-[9px] text-slate-400 mt-1">Calculated from pricing compliance checks.</span>
+                              </div>
+                              <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col gap-1 relative overflow-hidden">
+                                <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">Warning Points</span>
+                                <span className={`text-xl font-bold font-mono mt-1 ${myPharmacy.warningsCount > 0 ? 'text-red-400 animate-pulse' : 'text-slate-400'}`}>
+                                  {myPharmacy.warningsCount || 0} / 3 Warnings
+                                </span>
+                                <span className="text-[9px] text-slate-400 mt-1">Escalates towards platform bans.</span>
+                              </div>
+                              <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col gap-1 relative overflow-hidden">
+                                <span className="text-[10px] text-slate-500 font-mono uppercase tracking-wider">Active SKU Stocks</span>
+                                <span className="text-xl font-bold text-indigo-400 font-mono mt-1">{pharmacyInventory.length} SKUs</span>
+                                <span className="text-[9px] text-slate-400 mt-1">Live listings synced with catalog.</span>
+                              </div>
+                            </div>
+
+                            {/* Chart Card */}
+                            <div className="lg:col-span-2 bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col gap-3 min-h-[220px]">
+                              <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">Inventory Stock Distribution (Top 8 Items)</span>
+                              {inventoryChartData.length > 0 ? (
+                                <div className="h-40 w-full text-[10px] font-sans">
+                                  <ResponsiveContainer width="100%" height="100%">
+                                    <BarChart data={inventoryChartData}>
+                                      <XAxis dataKey="name" stroke="#64748b" tickLine={false} />
+                                      <YAxis stroke="#64748b" tickLine={false} />
+                                      <Tooltip 
+                                        contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }}
+                                        labelStyle={{ color: '#14b8a6', fontWeight: 'bold' }}
+                                      />
+                                      <Bar dataKey="stock" fill="#0d9488" radius={[4, 4, 0, 0]} name="Stock Units" />
+                                    </BarChart>
+                                  </ResponsiveContainer>
+                                </div>
+                              ) : (
+                                <div className="flex-1 flex items-center justify-center text-xs text-slate-500 border border-dashed border-slate-900 rounded-xl">
+                                  Go to the Inventory tab and sync billing software to populate graphs.
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </>
+                  )}
+
+                  {myPharmacy && pharmacyTab === 'inventory' && (
+                    <div className="flex flex-col gap-6 animate-fade-in">
+                      {['Pending Verification Request', 'Verification Requested'].includes(myPharmacy.status) ? (
+                        <div className="bg-slate-950 p-8 rounded-2xl border border-slate-800 text-center flex flex-col items-center justify-center gap-3 min-h-[300px]">
+                          <Lock className="w-8 h-8 text-amber-500/40 animate-pulse" />
+                          <h3 className="text-sm font-bold text-slate-350">Inventory Control Locked</h3>
+                          <p className="text-[11px] text-slate-500 max-w-xs leading-relaxed font-sans">
+                            Your inventory sync and override tools will be unlocked once a physical onboarding verification visit has been requested and scheduled.
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-8">
+                          {/* Inventory Sync Card */}
+                          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
+                            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2 font-mono">
+                              <RefreshCw className="w-4 h-4 text-teal-400" /> Automated Billing Sync
+                            </h3>
+                            <p className="text-xs text-slate-400">Connect your local retail pharmacy billing system (Tally, Marg, Medilite) to automatically synchronize catalog price levels and real-time stocks.</p>
+                            
+                            <div className="flex flex-col gap-3 mt-2">
+                              <div className="flex items-center gap-2">
+                                <input 
+                                  type="text" 
+                                  value={billingSoftwareName}
+                                  onChange={(e) => setBillingSoftwareName(e.target.value)}
+                                  className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg flex-1 text-slate-100 font-mono focus:outline-none focus:border-indigo-500 transition"
+                                />
+                                <button
+                                  onClick={handleSyncBillingSystem}
+                                  className="bg-indigo-600 hover:bg-indigo-500 text-white px-4 py-2.5 rounded-lg text-xs font-bold transition"
+                                >
+                                  Sync System
+                                </button>
+                              </div>
+                              
+                              <div className="text-[10px] text-slate-500 font-mono">
+                                Sync Status: <strong>{myPharmacy.inventoryUpdateFrequency === 'Real-time Integrator' ? 'LINKED (Real-time)' : 'DISCONNECTED'}</strong>
+                              </div>
+                            </div>
+                          </div>
+
+                          {/* Manual Medicine Entry */}
+                          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
+                            <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2 font-mono">
+                              <Plus className="w-4 h-4 text-teal-400" /> Manual Stock Override
+                            </h3>
+
+                            <form onSubmit={handleAddInventory} className="flex flex-col gap-3">
+                              <div className="flex flex-col gap-1">
+                                <label className="text-[10px] text-slate-500 font-mono">Select Medicine</label>
+                                <select
+                                  value={newInvItem.medicineId}
+                                  onChange={(e) => setNewInvItem({ ...newInvItem, medicineId: e.target.value })}
+                                  className="bg-slate-900 border border-slate-800 rounded-lg p-2.5 text-xs text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                                >
+                                  <option value="">-- Choose Medicine --</option>
+                                  {allMedicines.map(m => (
+                                    <option key={m._id} value={m._id}>{m.name} ({m.genericName})</option>
+                                  ))}
+                                </select>
+                              </div>
+
+                              <div className="grid grid-cols-2 gap-3">
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] text-slate-500 font-mono">Price ($)</label>
+                                  <input 
+                                    type="number" 
+                                    placeholder="Price"
+                                    value={newInvItem.price}
+                                    onChange={(e) => setNewInvItem({ ...newInvItem, price: e.target.value })}
+                                    className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                                  />
+                                </div>
+                                <div className="flex flex-col gap-1">
+                                  <label className="text-[10px] text-slate-500 font-mono">Stock Quantity</label>
+                                  <input 
+                                    type="number" 
+                                    placeholder="Stock count"
+                                    value={newInvItem.stock}
+                                    onChange={(e) => setNewInvItem({ ...newInvItem, stock: e.target.value })}
+                                    className="bg-slate-900 border border-slate-800 p-2.5 text-xs rounded-lg text-slate-100 focus:outline-none focus:border-indigo-500 transition"
+                                  />
+                                </div>
+                              </div>
+
+                              <button
+                                type="submit"
+                                className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-2.5 px-4 rounded-lg mt-1 transition"
+                              >
+                                Update Stock Entry
+                              </button>
+                            </form>
+                          </div>
+
+                          {/* Display Current Live Inventory */}
+                          <div className="md:col-span-2 bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
+                            <div className="flex items-center justify-between">
+                              <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                                <ClipboardList className="w-4 h-4 text-teal-400" /> Current Store Inventory Stock List
+                              </h3>
+                              <span className="text-[10px] font-mono text-slate-500">{pharmacyInventory.length} Active SKUs</span>
+                            </div>
+
+                            {pharmacyInventory.length > 0 ? (
+                              <div className="overflow-x-auto">
+                                <table className="w-full text-xs text-left text-slate-400">
+                                  <thead className="text-[10px] uppercase bg-slate-900 text-slate-500 font-mono border-b border-slate-800">
+                                    <tr>
+                                      <th className="py-3 px-4">Medicine name</th>
+                                      <th className="py-3 px-4">Listed Price</th>
+                                      <th className="py-3 px-4">Current Stock</th>
+                                      <th className="py-3 px-4">Availability</th>
+                                    </tr>
+                                  </thead>
+                                  <tbody>
+                                    {pharmacyInventory.map(item => (
+                                      <tr key={item._id} className="border-b border-slate-800 hover:bg-slate-900/50">
+                                        <td className="py-3 px-4 font-bold text-slate-200">{item.medicineName}</td>
+                                        <td className="py-3 px-4 text-teal-400 font-bold font-mono">${item.price}</td>
+                                        <td className="py-3 px-4 font-mono">{item.stock} units</td>
+                                        <td className="py-3 px-4">
+                                          <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
+                                            item.isAvailable ? 'bg-emerald-500/10 text-emerald-400' : 'bg-red-500/10 text-red-400'
+                                          }`}>
+                                            {item.isAvailable ? 'IN STOCK' : 'OUT OF STOCK'}
+                                          </span>
+                                        </td>
+                                      </tr>
+                                    ))}
+                                  </tbody>
+                                </table>
+                              </div>
+                            ) : (
+                              <div className="py-8 text-center text-slate-500 text-xs border border-slate-900 border-dashed rounded-xl">
+                                Inventory is empty. Sync billing software above to populate medicines.
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                    {myPharmacy && pharmacyTab === 'disputes' && (
+                    <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6 animate-fade-in">
+                      <div className="flex flex-col md:flex-row justify-between md:items-center border-b border-slate-900 pb-3 gap-2">
+                        <div>
+                          <h3 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                            <AlertOctagon className="w-5 h-5 text-rose-500" />
+                            Customer Pricing Disputes & Appeals
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-1">Review pricing mismatch or compliance tickets submitted by platform customers and file official response appeals.</p>
+                        </div>
+                        {/* Sub-tab selection for pharmacy owner */}
+                        <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-850 self-start md:self-auto">
+                          <button
+                            onClick={() => setPharmacyDisputesSubTab('active')}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition ${
+                              pharmacyDisputesSubTab === 'active' 
+                                ? 'bg-teal-600 text-white shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Active ({pharmacyComplaints.filter(c => c.status === 'Pending').length})
+                          </button>
+                          <button
+                            onClick={() => setPharmacyDisputesSubTab('past')}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition ${
+                              pharmacyDisputesSubTab === 'past' 
+                                ? 'bg-teal-600 text-white shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Past ({pharmacyComplaints.filter(c => c.status !== 'Pending').length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {(() => {
+                        const targetList = pharmacyDisputesSubTab === 'active'
+                          ? pharmacyComplaints.filter(c => c.status === 'Pending')
+                          : pharmacyComplaints.filter(c => c.status !== 'Pending');
+
+                        return targetList.length > 0 ? (
+                          <div className="flex flex-col gap-4">
+                            {targetList.map(comp => (
+                              <div key={comp._id} className="p-5 bg-slate-900 rounded-xl border border-slate-800 flex flex-col gap-4">
+                                <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-slate-950 pb-3 text-xs">
+                                  <div>
+                                    <span className="text-[9px] text-slate-550 font-mono block">DISPUTE ID: {comp._id}</span>
+                                    <span className="font-bold text-slate-200 mt-0.5 block">Reported By: {comp.customerName}</span>
+                                  </div>
+                                  <div className="flex items-center gap-2">
+                                    <span className={`px-2.5 py-1 rounded font-mono font-bold uppercase text-[9px] border ${
+                                      comp.type === 'Price Mismatch' ? 'bg-red-500/10 text-red-400 border-red-500/20' : 'bg-slate-950 text-slate-450 border-slate-800'
+                                    }`}>
+                                      {comp.type}
+                                    </span>
+                                    <span className={`px-2.5 py-1 rounded text-[9px] font-bold border ${
+                                      comp.status === 'Resolved' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+                                      comp.status === 'Dismissed' ? 'bg-slate-850 border-slate-800 text-slate-400' :
+                                      comp.responseFromPharmacy 
+                                        ? 'bg-blue-500/10 border-blue-500/20 text-blue-400' 
+                                        : 'bg-amber-500/10 border-amber-500/20 text-amber-400 animate-pulse'
+                                    }`}>
+                                      {comp.status === 'Pending'
+                                        ? (comp.responseFromPharmacy ? 'Under Admin Review' : 'Awaiting Store Response')
+                                        : comp.status}
+                                    </span>
+                                  </div>
+                                </div>
+
+                                <div className="flex flex-col gap-2">
+                                  <span className="text-[9px] text-slate-550 font-mono uppercase">LODGED COMPLAINT TEXT:</span>
+                                  <p className="text-xs text-slate-300 font-mono bg-slate-950 p-3 rounded border border-slate-850 leading-relaxed italic">
+                                    "{comp.description}"
+                                  </p>
+                                </div>
+
+                                {comp.responseFromPharmacy ? (
+                                  <div className="flex flex-col gap-2 bg-teal-950/10 border border-teal-500/15 p-4 rounded-lg">
+                                    <span className="text-[9px] text-teal-400 font-mono font-bold uppercase">SUBMITTED PHARMACY APPEAL:</span>
+                                    <p className="text-xs text-slate-200 italic">
+                                      "{comp.responseFromPharmacy}"
+                                    </p>
+                                  </div>
+                                ) : (
+                                  <div className="flex flex-col gap-2">
+                                    <span className="text-[9px] text-slate-550 font-mono uppercase">FILE AN OFFICIAL RESPONSE:</span>
+                                    <div className="flex flex-col gap-2.5">
+                                      <textarea
+                                        rows="3"
+                                        placeholder="Provide context, explain store POS price mismatch, sync logs discrepancies, or request dismissal..."
+                                        value={ownerReplyText[comp._id] || ''}
+                                        onChange={(e) => setOwnerReplyText({ ...ownerReplyText, [comp._id]: e.target.value })}
+                                        className="w-full bg-slate-950 border border-slate-800 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-550 focus:outline-none focus:border-teal-500 transition"
+                                      />
+                                      <button
+                                        onClick={() => handlePharmacyRespondComplaint(comp._id)}
+                                        className="self-end bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold text-xs px-5 py-2.5 rounded-xl transition shadow-lg shadow-teal-500/10"
+                                      >
+                                        Submit Official Response
+                                      </button>
+                                    </div>
+                                  </div>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="py-12 text-center text-slate-500 text-xs border border-slate-900 border-dashed rounded-xl">
+                            No {pharmacyDisputesSubTab} disputes or pricing mismatches have been logged against your pharmacy. Great job maintaining compliant pricing!
+                          </div>
+                        );
+                      })()}
                     </div>
                   )}
                 </div>
@@ -2339,14 +2612,14 @@ export default function App() {
                         <span className="text-[9px] text-slate-500 block font-mono uppercase tracking-wider">Pending</span>
                         <span className="text-xs font-bold text-amber-400 mt-1 block flex items-center gap-1.5">
                           <span className="w-1.5 h-1.5 rounded-full bg-amber-400 animate-pulse"></span>
-                          {executiveAssignments.filter(store => !['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length} Tasks
+                          {executiveAssignments.filter(store => !['Approved & Verified', 'Rejected', 'Needs Corrections'].includes(store.status)).length} Tasks
                         </span>
                       </div>
 
                       <div className="bg-slate-900 border border-slate-800/80 px-4 py-3 rounded-xl text-left min-w-[100px]">
                         <span className="text-[9px] text-slate-500 block font-mono uppercase tracking-wider">Completed</span>
                         <span className="text-xs font-bold text-emerald-400 mt-1 block">
-                          {executiveAssignments.filter(store => ['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length} Audits
+                          {executiveAssignments.filter(store => ['Approved & Verified', 'Rejected', 'Needs Corrections'].includes(store.status)).length} Audits
                         </span>
                       </div>
                     </div>
@@ -2366,7 +2639,7 @@ export default function App() {
                       }`}
                     >
                       <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse"></span>
-                      Active Audit Tasks ({executiveAssignments.filter(store => !['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length})
+                      Active Audit Tasks ({executiveAssignments.filter(store => !['Approved & Verified', 'Rejected', 'Needs Corrections'].includes(store.status)).length})
                     </button>
                     
                     <button
@@ -2381,7 +2654,7 @@ export default function App() {
                       }`}
                     >
                       <History className="w-3.5 h-3.5" />
-                      Past History & Records ({executiveAssignments.filter(store => ['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status)).length})
+                      Past History & Records ({executiveAssignments.filter(store => ['Approved & Verified', 'Rejected', 'Needs Corrections'].includes(store.status)).length})
                     </button>
 
                     <button
@@ -2401,8 +2674,8 @@ export default function App() {
                   </div>
 
                   {(() => {
-                    const activeAssignments = executiveAssignments.filter(store => !['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status));
-                    const pastAssignments = executiveAssignments.filter(store => ['Approved & Verified', 'Under Admin Review', 'Rejected', 'Needs Corrections'].includes(store.status));
+                    const activeAssignments = executiveAssignments.filter(store => !['Approved & Verified', 'Rejected', 'Needs Corrections'].includes(store.status));
+                    const pastAssignments = executiveAssignments.filter(store => ['Approved & Verified', 'Rejected', 'Needs Corrections'].includes(store.status));
                     const currentList = execTab === 'active' ? activeAssignments : pastAssignments;
                     const matchedReport = activeAssignment ? executiveReports.find(r => r.pharmacyId === activeAssignment._id) : null;
 
@@ -2509,7 +2782,7 @@ export default function App() {
                                       });
                                     }
                                   }}
-                                  className={`p-5 rounded-2xl border transition-all duration-300 cursor-pointer flex flex-col gap-3.5 relative overflow-hidden ${
+                                  className={`flex-shrink-0 p-5 rounded-2xl border transition-all duration-300 cursor-pointer flex flex-col gap-3.5 relative overflow-hidden ${
                                     activeAssignment?._id === store._id 
                                       ? execTab === 'active' 
                                         ? 'border-indigo-500 bg-indigo-950/20 shadow-md shadow-indigo-500/5' 
@@ -2543,16 +2816,24 @@ export default function App() {
                                     </div>
                                     
                                     {execTab === 'active' ? (
-                                      <span className="text-indigo-400 font-bold bg-indigo-500/10 px-2.5 py-1 rounded-lg border border-indigo-500/20 tracking-wide uppercase text-[8px]">
-                                        Pending Audit
-                                      </span>
+                                      store.status === 'Under Admin Review' ? (
+                                        <span className="px-2.5 py-1 rounded-lg border font-bold font-mono tracking-wide uppercase text-[8px] bg-amber-50 border-amber-200/60 text-amber-700">
+                                          Awaiting Review
+                                        </span>
+                                      ) : (
+                                        <span className="px-2.5 py-1 rounded-lg border font-bold font-mono tracking-wide uppercase text-[8px] bg-indigo-50 border-indigo-200/60 text-indigo-700">
+                                          Pending Audit
+                                        </span>
+                                      )
                                     ) : (
-                                      <span className={`px-2.5 py-1 rounded-lg border font-bold tracking-wide uppercase text-[8px] ${
+                                      <span className={`px-2.5 py-1 rounded-lg border font-bold font-mono tracking-wide uppercase text-[8px] ${
                                         store.status === 'Approved & Verified' 
-                                          ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
-                                          : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                          ? 'bg-emerald-50 border-emerald-200/60 text-emerald-700' 
+                                          : store.status === 'Rejected'
+                                            ? 'bg-red-50 border-red-200/60 text-red-700'
+                                            : 'bg-amber-50 border-amber-200/60 text-amber-700'
                                       }`}>
-                                        {store.status === 'Approved & Verified' ? 'Approved' : 'Awaiting Review'}
+                                        {store.status === 'Approved & Verified' ? 'Approved' : store.status === 'Rejected' ? 'Rejected' : store.status}
                                       </span>
                                     )}
                                   </div>
@@ -2579,9 +2860,13 @@ export default function App() {
                                       <h4 className="text-sm font-bold text-slate-100 font-sans mt-0.5">Audit Questionnaire Submitted</h4>
                                     </div>
                                     <div className={`px-2.5 py-1 rounded text-[10px] font-bold border uppercase tracking-wider self-start sm:self-auto ${
-                                      activeAssignment.status === 'Approved & Verified' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                      activeAssignment.status === 'Approved & Verified' 
+                                        ? 'bg-emerald-50 border-emerald-200/60 text-emerald-700' 
+                                        : activeAssignment.status === 'Rejected'
+                                          ? 'bg-red-50 border-red-200/60 text-red-700'
+                                          : 'bg-amber-50 border-amber-200/60 text-amber-700'
                                     }`}>
-                                      Status: {activeAssignment.status}
+                                      Status: {activeAssignment.status === 'Under Admin Review' ? 'Under Review' : activeAssignment.status}
                                     </div>
                                   </div>
 
@@ -2598,7 +2883,7 @@ export default function App() {
                                         </div>
                                         <div>
                                           <span className="text-[9px] text-slate-500 block uppercase">Inspector Recommendation</span>
-                                          <span className={`font-bold mt-0.5 ${matchedReport.recommendation === 'Approved' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                          <span className={`font-bold mt-0.5 ${matchedReport.recommendation === 'Approved' ? 'text-emerald-600' : 'text-rose-600'}`}>
                                             {matchedReport.recommendation}
                                           </span>
                                         </div>
@@ -2646,9 +2931,64 @@ export default function App() {
                                       )}
                                     </div>
                                   ) : (
-                                    <p className="text-xs text-slate-400 leading-relaxed font-sans">
-                                      Physical audit checklist submitted. Waiting for SuperAdmin command center to synchronize the detailed questionnaire records.
-                                    </p>
+                                    <div className="flex flex-col gap-4">
+                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Inspected By</span>
+                                          <span className="font-bold text-slate-200 font-sans mt-0.5">{activeAssignment.assignedExecutiveName || 'System Auditor'}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Scheduled Visit Date</span>
+                                          <span className="font-bold text-slate-200 mt-0.5">{activeAssignment.visitScheduleDate || activeAssignment.preferredVisitDate || 'N/A'}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Drug License No</span>
+                                          <span className="font-bold text-slate-200 font-mono mt-0.5">{activeAssignment.drugLicense}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">GST Number</span>
+                                          <span className="font-bold text-slate-200 font-mono mt-0.5">{activeAssignment.gstNumber}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Store Timings</span>
+                                          <span className="font-bold text-slate-200 font-sans mt-0.5">{activeAssignment.storeTimings || 'N/A'}</span>
+                                        </div>
+                                        <div>
+                                          <span className="text-[9px] text-slate-500 block uppercase">Billing Integrator</span>
+                                          <span className="font-bold text-teal-400 font-sans mt-0.5">{activeAssignment.billingSoftware || 'MedSafe-Link Basic'}</span>
+                                        </div>
+                                      </div>
+
+                                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850">
+                                        <span className="text-[9px] text-slate-500 block uppercase mb-1.5">Compliance Documents Checklist</span>
+                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[9px] font-sans">
+                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
+                                            {activeAssignment.certifications?.includes('DRUG_LICENSE_UPLOADED') || activeAssignment.status === 'Approved & Verified' ? (
+                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                            ) : (
+                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                                            )}
+                                            <span>Drug License Verified</span>
+                                          </div>
+                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
+                                            {activeAssignment.certifications?.includes('GST_CERTIFICATE_UPLOADED') || activeAssignment.status === 'Approved & Verified' ? (
+                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
+                                            ) : (
+                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
+                                            )}
+                                            <span>GST Registry Verified</span>
+                                          </div>
+                                        </div>
+                                      </div>
+
+                                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                                        <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Store Contact Particulars</span>
+                                        <p className="text-slate-300 text-[11px] leading-relaxed">
+                                          Address: <strong className="text-slate-200">{activeAssignment.address}</strong><br/>
+                                          Phone: <strong className="text-slate-200">{activeAssignment.contact}</strong>
+                                        </p>
+                                      </div>
+                                    </div>
                                   )}
                                 </div>
                               ) : (
@@ -2793,7 +3133,7 @@ export default function App() {
 
                       </div>
                     ) : (
-                      <div className="py-12 border border-slate-800 border-dashed rounded-2xl text-center text-slate-500 text-xs">
+                      <div className="py-12 border border-slate-800 border-dashed rounded-2xl text-center text-slate-550 text-xs">
                         No visit assignments dispatched. Go to Command Center (Admin) to assign this Inspector.
                       </div>
                     );
@@ -2804,208 +3144,961 @@ export default function App() {
               {/* ==================== 4. SUPERADMIN COMMAND CENTER ==================== */}
               {activeRole === 'admin' && (
                 <div className="flex flex-col gap-8">
-                  
-                  {/* KPI Statistics Row */}
-                  <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                    {[
-                      { label: 'Verified Pharmacies', val: adminPharmacies.filter(p => p.status === 'Approved & Verified').length, sub: 'Publicly live', icon: ShieldCheck, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
-                      { label: 'Pending Visits', val: adminPharmacies.filter(p => p.status === 'Verification Requested').length, sub: 'Needs inspector', icon: ClipboardList, color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
-                      { label: 'Active Disputes', val: adminComplaints.filter(c => c.status === 'Pending').length, sub: 'Awaiting review', icon: AlertOctagon, color: 'text-rose-400 bg-rose-500/10 border-rose-500/20' },
-                      { label: 'Trust Integrity', val: '98.6%', sub: 'Platform average', icon: Award, color: 'text-teal-400 bg-teal-500/10 border-teal-500/20' }
-                    ].map((kpi, idx) => {
-                      const Icon = kpi.icon;
-                      return (
-                        <div key={idx} className={`p-4 rounded-xl border bg-slate-950 flex flex-col gap-2 ${kpi.color.split(' ')[2]}`}>
-                          <div className="flex justify-between items-center">
-                            <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">{kpi.label}</span>
-                            <div className={`p-1.5 rounded-lg border ${kpi.color.split(' ').slice(0,2).join(' ')}`}>
-                              <Icon className="w-4 h-4" />
-                            </div>
-                          </div>
-                          <span className="text-sm font-bold text-slate-100 font-mono mt-1">{kpi.val}</span>
-                          <span className="text-[9px] text-slate-500">{kpi.sub}</span>
-                        </div>
-                      );
-                    })}
+                  {/* SuperAdmin Tab Bar */}
+                  <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-px">
+                    <button
+                      onClick={() => {
+                        setAdminTab('analytics');
+                        setSelectedDirectoryItem(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        adminTab === 'analytics' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <TrendingUp className="w-3.5 h-3.5" />
+                      Analytics
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAdminTab('deployment');
+                        setSelectedDirectoryItem(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        adminTab === 'deployment' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <ClipboardList className="w-3.5 h-3.5" />
+                      Deployment Hub
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAdminTab('audits');
+                        setSelectedDirectoryItem(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        adminTab === 'audits' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <ShieldCheck className="w-3.5 h-3.5" />
+                      Audit Approvals
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAdminTab('disputes');
+                        setSelectedDirectoryItem(null);
+                        // Auto-select first dispute if available
+                        const pending = adminComplaints.filter(c => c.status === 'Pending');
+                        if (pending.length > 0) {
+                          setAdminSelectedDispute(pending[0]);
+                        } else if (adminComplaints.length > 0) {
+                          setAdminSelectedDispute(adminComplaints[0]);
+                        } else {
+                          setAdminSelectedDispute(null);
+                        }
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        adminTab === 'disputes' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <AlertOctagon className="w-3.5 h-3.5" />
+                      Disputes Center
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAdminTab('directory');
+                        setSelectedDirectoryItem(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        adminTab === 'directory' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <User className="w-3.5 h-3.5" />
+                      Directory ({adminUsers.length + adminPharmacies.length})
+                    </button>
+                    <button
+                      onClick={() => {
+                        setAdminTab('logs');
+                        setSelectedDirectoryItem(null);
+                      }}
+                      className={`px-4 py-3 text-xs font-bold transition-all relative border-b-2 -mb-px flex items-center gap-2 ${
+                        adminTab === 'logs' 
+                          ? 'border-indigo-500 text-indigo-400' 
+                          : 'border-transparent text-slate-400 hover:text-slate-200'
+                      }`}
+                    >
+                      <FileText className="w-3.5 h-3.5" />
+                      Platform Logs
+                    </button>
                   </div>
 
-                  {/* Assign Verification Executive (Step 3 Workspace) */}
-                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <ClipboardList className="w-5 h-5 text-indigo-400" /> Executive Deployment Hub
-                    </h3>
-                    <p className="text-xs text-slate-400">Admin assigns physically closest inspector to visit pharmacies that submitted onboarding requests.</p>
-
-                    <form onSubmit={handleAssignExecutive} className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-2">
-                      <div className="flex flex-col gap-1 md:col-span-2">
-                        <label className="text-[10px] text-slate-500 font-mono">Pending Pharmacy Request</label>
-                        <select
-                          required
-                          value={assigningStoreId}
-                          onChange={(e) => setAssigningStoreId(e.target.value)}
-                          className="bg-slate-900 border border-slate-800 rounded p-2.5 text-xs text-slate-100"
-                        >
-                          <option value="">-- Choose Store --</option>
-                          {adminPharmacies.filter(p => p.status === 'Verification Requested').map(store => (
-                            <option key={store._id} value={store._id}>{store.name} ({store.address})</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <div className="flex flex-col gap-1">
-                        <label className="text-[10px] text-slate-500 font-mono">Assign Inspector</label>
-                        <select
-                          required
-                          value={assigningExecId}
-                          onChange={(e) => setAssigningExecId(e.target.value)}
-                          className="bg-slate-900 border border-slate-800 rounded p-2.5 text-xs text-slate-100"
-                        >
-                          <option value="">-- Choose Inspector --</option>
-                          {adminExecutives.map(exec => (
-                            <option key={exec._id} value={exec._id}>{exec.name} (Active)</option>
-                          ))}
-                        </select>
-                      </div>
-
-                      <button
-                        type="submit"
-                        className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 rounded-lg md:self-end"
-                      >
-                        Deploy Inspector
-                      </button>
-                    </form>
-                  </div>
-
-                  {/* Pending Audits Approval desk (Step 6 Workspace) */}
-                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <ShieldCheck className="w-5 h-5 text-emerald-400" /> Physical Audit Approvals Workspace
-                    </h3>
-                    <p className="text-xs text-slate-400">Review physical verification reports uploaded by deployed Inspectors and grant the trusted verified badge.</p>
-
-                    {adminPharmacies.filter(p => p.status === 'Under Admin Review').length > 0 ? (
-                      <div className="flex flex-col gap-4 mt-2">
-                        {adminPharmacies.filter(p => p.status === 'Under Admin Review').map(store => {
-                          // Find corresponding report if any
-                          const rep = adminReports.find(r => r.pharmacyId === store._id);
+                  {/* 1. Analytics Tab */}
+                  {adminTab === 'analytics' && (
+                    <div className="flex flex-col gap-8 animate-fade-in">
+                      {/* KPI Statistics Row */}
+                      <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
+                        {[
+                          { label: 'Verified Pharmacies', val: adminPharmacies.filter(p => p.status === 'Approved & Verified').length, sub: 'Publicly live', icon: ShieldCheck, color: 'text-emerald-400 bg-emerald-500/10 border-emerald-500/20' },
+                          { label: 'Pending Visits', val: adminPharmacies.filter(p => p.status === 'Verification Requested').length, sub: 'Needs inspector', icon: ClipboardList, color: 'text-amber-400 bg-amber-500/10 border-amber-500/20' },
+                          { label: 'Active Disputes', val: adminComplaints.filter(c => c.status === 'Pending').length, sub: 'Awaiting review', icon: AlertOctagon, color: 'text-rose-400 bg-rose-500/10 border-rose-500/20' },
+                          { label: 'Trust Integrity', val: '98.6%', sub: 'Platform average', icon: Award, color: 'text-teal-400 bg-teal-500/10 border-teal-500/20' }
+                        ].map((kpi, idx) => {
+                          const Icon = kpi.icon;
                           return (
-                            <div key={store._id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex flex-col gap-4">
-                              <div className="flex justify-between items-start">
-                                <div>
-                                  <h4 className="text-sm font-bold text-slate-100">{store.name}</h4>
-                                  <p className="text-xs text-slate-400">{store.address}</p>
+                            <div key={idx} className={`p-4 rounded-xl border bg-slate-950 flex flex-col gap-2 ${kpi.color.split(' ')[2]}`}>
+                              <div className="flex justify-between items-center">
+                                <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">{kpi.label}</span>
+                                <div className={`p-1.5 rounded-lg border ${kpi.color.split(' ').slice(0,2).join(' ')}`}>
+                                  <Icon className="w-4 h-4" />
                                 </div>
-                                <span className="px-2 py-0.5 rounded text-[8px] bg-slate-950 border border-slate-800 text-amber-300 font-mono uppercase">
-                                  {store.status}
-                                </span>
                               </div>
-
-                              {rep && (
-                                <div className="p-3.5 bg-slate-950 rounded-lg border border-slate-800 flex flex-col gap-2 text-xs">
-                                  <div className="flex justify-between items-center">
-                                    <span className="font-bold font-mono text-[10px] text-slate-400">INSPECTION REPORT BY: {rep.executiveName}</span>
-                                    <span className="font-bold text-emerald-400 font-mono text-[10px]">RECOMMENDATION: {rep.recommendation}</span>
-                                  </div>
-                                  <p className="text-slate-300 font-mono text-[11px]">"{rep.complianceNotes || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'}"</p>
-                                </div>
-                              )}
-
-                              <div className="flex gap-2 self-end">
-                                <button
-                                  onClick={() => handleAdminApprovePharmacy(store._id, 'correct')}
-                                  className="px-3 py-1.5 rounded border border-slate-850 hover:bg-slate-800 text-xs text-slate-400 transition"
-                                >
-                                  Request Corrections
-                                </button>
-                                <button
-                                  onClick={() => handleAdminApprovePharmacy(store._id, 'approve')}
-                                  className="px-4 py-1.5 rounded bg-emerald-600 hover:bg-emerald-500 font-bold text-xs text-white transition flex items-center gap-1.5"
-                                >
-                                  <Check className="w-3.5 h-3.5" /> Approve & Verify Store
-                                </button>
-                              </div>
+                              <span className="text-sm font-bold text-slate-100 font-mono mt-1">{kpi.val}</span>
+                              <span className="text-[9px] text-slate-550">{kpi.sub}</span>
                             </div>
                           );
                         })}
                       </div>
-                    ) : (
-                      <div className="py-6 border border-slate-900 border-dashed rounded-xl text-center text-slate-500 text-xs font-mono">
-                        Zero reports awaiting SuperAdmin review.
-                      </div>
-                    )}
-                  </div>
 
-                  {/* Anti-Fraud Price disputes Center */}
-                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <AlertOctagon className="w-5 h-5 text-rose-500" /> Active Mismatch Pricing Disputes
-                    </h3>
-                    <p className="text-xs text-slate-400">Real-time listing of customer-reported violations. If an invoice scan matches inflated rates, penalize the pharmacy instantly. (3 Warnings results in automated Platform Bans!)</p>
-
-                    {adminComplaints.filter(c => c.status === 'Pending').length > 0 ? (
-                      <div className="flex flex-col gap-4 mt-2">
-                        {adminComplaints.filter(c => c.status === 'Pending').map(comp => (
-                          <div key={comp._id} className="p-4 bg-slate-900 rounded-xl border border-slate-800 flex flex-col gap-3">
-                            <div className="flex justify-between items-start text-xs">
-                              <div>
-                                <span className="text-[10px] text-slate-500 font-mono">DISPUTE ID: {comp._id}</span>
-                                <h4 className="text-sm font-bold text-slate-100 mt-0.5">Accused: {comp.pharmacyName}</h4>
+                      {/* Platform Security Area Chart */}
+                      {(() => {
+                        const adminChartData = adminPharmacies.slice(0, 10).map(store => ({
+                          name: store.name.split(' ')[0],
+                          trust: store.trustScore || 100,
+                          warnings: store.warningsCount || 0
+                        }));
+                        return (
+                          <div className="bg-slate-950 p-5 rounded-2xl border border-slate-800 flex flex-col gap-3 min-h-[220px]">
+                            <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">Platform Security & Pharmacy Trust Index Analytics</span>
+                            {adminChartData.length > 0 ? (
+                              <div className="h-40 w-full text-[10px] font-sans">
+                                <ResponsiveContainer width="100%" height="100%">
+                                  <AreaChart data={adminChartData}>
+                                    <XAxis dataKey="name" stroke="#64748b" tickLine={false} />
+                                    <YAxis domain={[0, 100]} stroke="#64748b" tickLine={false} />
+                                    <Tooltip 
+                                      contentStyle={{ backgroundColor: '#0f172a', border: '1px solid #334155', borderRadius: '8px', color: '#f8fafc' }}
+                                      labelStyle={{ color: '#6366f1', fontWeight: 'bold' }}
+                                    />
+                                    <Area type="monotone" dataKey="trust" stroke="#6366f1" fill="rgba(99, 102, 241, 0.1)" strokeWidth={2} name="Trust Score (%)" />
+                                  </AreaChart>
+                                </ResponsiveContainer>
                               </div>
-                              <span className="px-2 py-0.5 rounded text-[9px] bg-red-500/10 text-red-400 font-mono font-bold uppercase border border-red-500/25">
-                                {comp.type}
+                            ) : (
+                              <div className="flex-1 flex items-center justify-center text-xs text-slate-550 border border-dashed border-slate-900 rounded-xl">
+                                Loading analytics data...
+                              </div>
+                            )}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* 2. Deployment Hub Tab */}
+                  {adminTab === 'deployment' && (
+                    <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4 animate-fade-in">
+                      <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                        <ClipboardList className="w-5 h-5 text-indigo-400" /> Executive Deployment Hub
+                      </h3>
+                      <p className="text-xs text-slate-400">Admin assigns physically closest inspector to visit pharmacies that submitted onboarding requests.</p>
+
+                      <form onSubmit={handleAssignExecutive} className="grid grid-cols-1 md:grid-cols-4 gap-4 mt-2">
+                        <div className="flex flex-col gap-1 md:col-span-2">
+                          <label className="text-[10px] text-slate-500 font-mono">Pending Pharmacy Request</label>
+                          <select
+                            required
+                            value={assigningStoreId}
+                            onChange={(e) => setAssigningStoreId(e.target.value)}
+                            className="bg-slate-900 border border-slate-800 rounded p-2.5 text-xs text-slate-100"
+                          >
+                            <option value="">-- Choose Store --</option>
+                            {adminPharmacies.filter(p => p.status === 'Verification Requested').map(store => (
+                              <option key={store._id} value={store._id}>{store.name} ({store.address})</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <div className="flex flex-col gap-1">
+                          <label className="text-[10px] text-slate-500 font-mono">Assign Inspector</label>
+                          <select
+                            required
+                            value={assigningExecId}
+                            onChange={(e) => setAssigningExecId(e.target.value)}
+                            className="bg-slate-900 border border-slate-800 rounded p-2.5 text-xs text-slate-100"
+                          >
+                            <option value="">-- Choose Inspector --</option>
+                            {adminExecutives.map(exec => (
+                              <option key={exec._id} value={exec._id}>{exec.name} (Active)</option>
+                            ))}
+                          </select>
+                        </div>
+
+                        <button
+                          type="submit"
+                          className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 rounded-lg md:self-end"
+                        >
+                          Deploy Inspector
+                        </button>
+                      </form>
+
+                      {/* Deployed list detail */}
+                      <div className="mt-6 border-t border-slate-900 pt-4">
+                        <h4 className="text-xs font-bold text-slate-200 mb-3">Active Field Deployment Registry</h4>
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {adminPharmacies.filter(p => p.status === 'Executive Assigned' || p.status === 'Under Admin Review').map(p => (
+                            <div key={p._id} className="p-3.5 bg-slate-900 rounded-xl border border-slate-850 flex flex-col gap-1.5 text-xs">
+                              <div className="flex justify-between items-start">
+                                <span className="font-bold text-slate-200">{p.name}</span>
+                                <span className="px-1.5 py-0.5 rounded text-[8px] bg-indigo-500/10 text-indigo-400 border border-indigo-500/20 font-mono uppercase">
+                                  {p.status}
+                                </span>
+                              </div>
+                              <span className="text-[10px] text-slate-400">Inspector: {p.assignedExecutiveName || 'Unassigned'}</span>
+                              <span className="text-[10px] text-slate-500 font-mono">Visit Date: {p.visitScheduleDate || 'Pending'}</span>
+                            </div>
+                          ))}
+                          {adminPharmacies.filter(p => p.status === 'Executive Assigned' || p.status === 'Under Admin Review').length === 0 && (
+                            <div className="col-span-2 py-6 text-center text-slate-550 text-xs font-mono border border-slate-900 border-dashed rounded-xl">
+                              No active field deployments at this time.
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+                  )}
+                       {/* 3. Audit Approvals Tab */}
+                  {adminTab === 'audits' && (
+                    <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4 animate-fade-in">
+                      <div className="flex flex-col md:flex-row justify-between md:items-center border-b border-slate-900 pb-3 gap-2">
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                            <ShieldCheck className="w-5 h-5 text-emerald-400" /> Physical Audit Approvals Workspace
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-1">Review physical verification reports uploaded by deployed Inspectors and grant the trusted verified badge.</p>
+                        </div>
+                        {/* Sub-tab selection */}
+                        <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-850 self-start md:self-auto">
+                          <button
+                            onClick={() => setAuditsSubTab('present')}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition ${
+                              auditsSubTab === 'present' 
+                                ? 'bg-indigo-600 text-white shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Active Reviews ({adminPharmacies.filter(p => p.status === 'Under Admin Review').length})
+                          </button>
+                          <button
+                            onClick={() => setAuditsSubTab('past')}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition ${
+                              auditsSubTab === 'past' 
+                                ? 'bg-indigo-600 text-white shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Audit History ({adminPharmacies.filter(p => ['Approved & Verified', 'Needs Corrections', 'Rejected'].includes(p.status)).length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {(() => {
+                        const targetList = auditsSubTab === 'present'
+                          ? adminPharmacies.filter(p => p.status === 'Under Admin Review')
+                          : adminPharmacies.filter(p => ['Approved & Verified', 'Needs Corrections', 'Rejected'].includes(p.status));
+
+                        return targetList.length > 0 ? (
+                          <div className="flex flex-col gap-4 mt-2">
+                            {targetList.map(store => {
+                              const rep = adminReports.find(r => r.pharmacyId === store._id);
+                              return (
+                                <div key={store._id} className="p-4 rounded-xl bg-slate-900 border border-slate-800 flex flex-col gap-4">
+                                  <div className="flex justify-between items-start">
+                                    <div>
+                                      <h4 className="text-sm font-bold text-slate-100">{store.name}</h4>
+                                      <p className="text-xs text-slate-400">{store.address}</p>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded text-[8px] border font-mono uppercase font-bold ${
+                                      store.status === 'Approved & Verified' ? 'bg-emerald-50 border-emerald-200/60 text-emerald-700' :
+                                      store.status === 'Rejected' ? 'bg-red-50 border-red-200/60 text-red-700' :
+                                      store.status === 'Needs Corrections' ? 'bg-amber-50 border-amber-200/60 text-amber-700' :
+                                      'bg-blue-50 border-blue-200/60 text-blue-800'
+                                    }`}>
+                                      {store.status === 'Under Admin Review' ? 'Awaiting Review' : store.status}
+                                    </span>
+                                  </div>
+
+                                  {rep && (
+                                    <div className="p-3.5 bg-slate-950 rounded-lg border border-slate-800 flex flex-col gap-2 text-xs">
+                                      <div className="flex justify-between items-center">
+                                        <span className="font-bold font-mono text-[10px] text-slate-400">INSPECTION REPORT BY: {rep.executiveName}</span>
+                                        <span className="font-bold text-emerald-400 font-mono text-[10px]">RECOMMENDATION: {rep.recommendation}</span>
+                                      </div>
+                                      <p className="text-slate-350 font-mono text-[11px]">"{rep.complianceNotes || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'}"</p>
+                                    </div>
+                                  )}
+
+                                  {auditsSubTab === 'present' ? (
+                                    <div className="flex flex-col gap-3 pt-3 border-t border-slate-800/80">
+                                      <div className="flex flex-col gap-1">
+                                        <label className="text-[10px] text-slate-400 font-mono font-medium uppercase tracking-wider">SuperAdmin Verification Comments (Optional)</label>
+                                        <textarea
+                                          rows="2"
+                                          placeholder="Type details, special allowances, or exact reasons if rejecting/requesting corrections..."
+                                          value={adminReviewComments[store._id] || ''}
+                                          onChange={(e) => setAdminReviewComments({
+                                            ...adminReviewComments,
+                                            [store._id]: e.target.value
+                                          })}
+                                          className="w-full bg-slate-950 border border-slate-850 rounded-xl p-3 text-xs text-slate-100 placeholder-slate-600 focus:outline-none focus:border-indigo-500 transition"
+                                        />
+                                      </div>
+                                      <div className="flex flex-wrap gap-2 justify-end mt-1">
+                                        <button
+                                          onClick={() => handleAdminApprovePharmacy(store._id, 'reject', adminReviewComments[store._id])}
+                                          className="px-3.5 py-2 rounded-xl bg-rose-500/10 border border-rose-500/20 hover:bg-rose-500 hover:text-white font-bold text-xs text-rose-400 transition"
+                                        >
+                                          Reject Store
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminApprovePharmacy(store._id, 'correct', adminReviewComments[store._id])}
+                                          className="px-3.5 py-2 rounded-xl border border-slate-850 hover:bg-slate-800 text-xs text-slate-400 transition font-medium"
+                                        >
+                                          Request Corrections
+                                        </button>
+                                        <button
+                                          onClick={() => handleAdminApprovePharmacy(store._id, 'approve', adminReviewComments[store._id])}
+                                          className="px-4 py-2 rounded-xl bg-emerald-600 hover:bg-emerald-500 font-bold text-xs text-white transition flex items-center gap-1.5 shadow-lg shadow-emerald-500/15"
+                                        >
+                                          <Check className="w-4 h-4" /> Approve & Verify Store
+                                        </button>
+                                      </div>
+                                    </div>
+                                  ) : (
+                                    <div className="p-3.5 bg-slate-950/60 rounded-xl border border-slate-850/80 text-xs flex flex-col gap-1.5">
+                                      <span className="text-[9px] font-mono text-slate-500 block uppercase tracking-wider">SuperAdmin Verification Comments:</span>
+                                      <p className="italic text-slate-350">
+                                        "{store.adminComments && store.adminComments !== 'None' ? store.adminComments : 'Verified by Inspector on physical drug licensing authenticity check.'}"
+                                      </p>
+                                    </div>
+                                  )}
+                                </div>
+                              );
+                            })}
+                          </div>
+                        ) : (
+                          <div className="py-12 border border-slate-900 border-dashed rounded-xl text-center text-slate-555 text-xs font-mono">
+                            {auditsSubTab === 'present' ? 'Zero reports awaiting SuperAdmin review.' : 'No past audit decisions on record.'}
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* 4. Disputes Center Tab */}
+                  {adminTab === 'disputes' && (
+                    <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4 animate-fade-in">
+                      <div className="flex flex-col md:flex-row justify-between md:items-center border-b border-slate-900 pb-3 gap-2">
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                            <AlertOctagon className="w-5 h-5 text-rose-500" /> Pricing violation disputes desk
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-1">Real-time listing of customer-reported violations. If an invoice scan matches inflated rates, penalize the pharmacy instantly.</p>
+                        </div>
+                        {/* Sub-tab selection */}
+                        <div className="flex bg-slate-900 p-1 rounded-lg border border-slate-850 self-start md:self-auto">
+                          <button
+                            onClick={() => {
+                              setDisputesSubTab('active');
+                              const pending = adminComplaints.filter(c => c.status === 'Pending');
+                              setAdminSelectedDispute(pending.length > 0 ? pending[0] : null);
+                            }}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition ${
+                              disputesSubTab === 'active' 
+                                ? 'bg-indigo-600 text-white shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Active Disputes ({adminComplaints.filter(c => c.status === 'Pending').length})
+                          </button>
+                          <button
+                            onClick={() => {
+                              setDisputesSubTab('past');
+                              const past = adminComplaints.filter(c => c.status !== 'Pending');
+                              setAdminSelectedDispute(past.length > 0 ? past[0] : null);
+                            }}
+                            className={`px-3 py-1.5 text-xs font-bold rounded-md transition ${
+                              disputesSubTab === 'past' 
+                                ? 'bg-indigo-600 text-white shadow-sm' 
+                                : 'text-slate-400 hover:text-slate-200'
+                            }`}
+                          >
+                            Past Disputes ({adminComplaints.filter(c => c.status !== 'Pending').length})
+                          </button>
+                        </div>
+                      </div>
+
+                      {/* disputes list and details split */}
+                      {(() => {
+                        const targetList = disputesSubTab === 'active'
+                          ? adminComplaints.filter(c => c.status === 'Pending')
+                          : adminComplaints.filter(c => c.status !== 'Pending');
+
+                        return (
+                          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 mt-2">
+                            {/* Left List */}
+                            <div className="lg:col-span-1 flex flex-col gap-2 max-h-[500px] overflow-y-auto pr-1">
+                              {targetList.length > 0 ? (
+                                targetList.map(comp => (
+                                  <div
+                                    key={comp._id}
+                                    onClick={() => setAdminSelectedDispute(comp)}
+                                    className={`p-3.5 rounded-xl border transition cursor-pointer flex flex-col gap-1.5 ${
+                                      adminSelectedDispute?._id === comp._id 
+                                        ? 'border-indigo-500 bg-indigo-950/15' 
+                                        : 'border-slate-855 bg-slate-900 hover:bg-slate-900/50'
+                                    }`}
+                                  >
+                                    <div className="flex justify-between items-start text-[10px]">
+                                      <span className="font-mono text-slate-500 block truncate max-w-[120px]">{comp._id}</span>
+                                      <span className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase ${
+                                        comp.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                                        comp.status === 'Dismissed' ? 'bg-slate-800 text-slate-455 border border-slate-850' :
+                                        comp.responseFromPharmacy 
+                                          ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' 
+                                          : 'bg-red-500/10 text-red-400 border border-red-500/20 animate-pulse'
+                                      }`}>
+                                        {comp.status === 'Pending' 
+                                          ? (comp.responseFromPharmacy ? 'Under Review' : 'Awaiting Response')
+                                          : comp.status}
+                                      </span>
+                                    </div>
+                                    <h4 className="text-xs font-bold text-slate-200 truncate">{comp.pharmacyName}</h4>
+                                    <span className="text-[10px] text-slate-450 font-mono block">{comp.type}</span>
+                                  </div>
+                                ))
+                              ) : (
+                                <div className="py-8 text-center text-slate-555 text-xs font-mono border border-slate-900 border-dashed rounded-xl">
+                                  No {disputesSubTab} disputes recorded.
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Right Details Panel */}
+                            <div className="lg:col-span-2">
+                              {adminSelectedDispute && targetList.some(c => c._id === adminSelectedDispute._id) ? (
+                                <div className="bg-slate-900 p-5 rounded-2xl border border-slate-800 flex flex-col gap-4 animate-fade-in">
+                                  <div className="flex justify-between items-start border-b border-slate-855 pb-3">
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 font-mono block">DISPUTE REFERENCE PARTICULARS</span>
+                                      <h3 className="text-sm font-bold text-slate-100 mt-1">{adminSelectedDispute.pharmacyName}</h3>
+                                      <span className="text-[10px] text-red-400 font-mono block">{adminSelectedDispute.type}</span>
+                                    </div>
+                                    <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border uppercase ${
+                                      adminSelectedDispute.status === 'Resolved' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+                                      adminSelectedDispute.status === 'Dismissed' ? 'bg-slate-800 border-slate-850 text-slate-400' :
+                                      adminSelectedDispute.responseFromPharmacy
+                                        ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                                        : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                    }`}>
+                                      {adminSelectedDispute.status === 'Pending'
+                                        ? (adminSelectedDispute.responseFromPharmacy ? 'Under Review' : 'Awaiting Response')
+                                        : adminSelectedDispute.status}
+                                    </span>
+                                  </div>
+
+                                  <div className="grid grid-cols-2 gap-4 text-[10px] font-mono bg-slate-950 p-3 rounded-lg border border-slate-850">
+                                    <div>
+                                      <span className="text-slate-550 block">DISPUTE ID</span>
+                                      <span className="text-slate-300 font-bold block truncate">{adminSelectedDispute._id}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-slate-550 block">COMPLAINANT</span>
+                                      <span className="text-slate-300 font-bold block">{adminSelectedDispute.customerName}</span>
+                                    </div>
+                                    {adminSelectedDispute.mockInvoiceText && (
+                                      <div className="col-span-2 border-t border-slate-900 pt-2">
+                                        <span className="text-slate-550 block">SUBMITTED INVOICE METRICS</span>
+                                        <pre className="text-[9px] text-slate-400 bg-slate-900 p-2 rounded mt-1 overflow-x-auto whitespace-pre font-mono">{adminSelectedDispute.mockInvoiceText}</pre>
+                                      </div>
+                                    )}
+                                  </div>
+
+                                  <div>
+                                    <span className="text-[9px] text-slate-550 font-mono block mb-1">CUSTOMER DESCRIPTION</span>
+                                    <p className="text-xs text-slate-350 italic bg-slate-950 p-3 rounded border border-slate-850">
+                                      "{adminSelectedDispute.description}"
+                                    </p>
+                                  </div>
+
+                                  <div>
+                                    <span className="text-[9px] text-slate-550 font-mono block mb-1">STORE OWNER RESPONSE & APPEAL</span>
+                                    {adminSelectedDispute.responseFromPharmacy ? (
+                                      <p className="text-xs text-teal-400 italic bg-teal-500/5 p-3 rounded border border-teal-500/10 font-bold">
+                                        "{adminSelectedDispute.responseFromPharmacy}"
+                                      </p>
+                                    ) : (
+                                      <p className="text-xs text-amber-500/80 italic bg-amber-500/5 p-3 rounded border border-dashed border-amber-500/20 font-bold">
+                                        Store owner yet to reply (Awaiting response appeal).
+                                      </p>
+                                    )}
+                                  </div>
+
+                                  {/* Adjudication actions if pending */}
+                                  {adminSelectedDispute.status === 'Pending' && (
+                                    <div className="flex flex-col sm:flex-row gap-3 items-center justify-between mt-2 pt-3 border-t border-slate-850">
+                                      {!adminSelectedDispute.responseFromPharmacy ? (
+                                        <span className="text-[10px] text-amber-500 font-mono italic">
+                                          ⚠️ Adjudication locked until pharmacy owner submits response appeal
+                                        </span>
+                                      ) : <span />}
+                                      <div className="flex gap-2 self-end">
+                                        <button
+                                          disabled={!adminSelectedDispute.responseFromPharmacy}
+                                          onClick={() => handleAdjudicateComplaint(adminSelectedDispute._id, 'dismiss')}
+                                          className={`px-3.5 py-2 rounded text-xs font-bold transition ${
+                                            !adminSelectedDispute.responseFromPharmacy 
+                                              ? 'bg-slate-900 text-slate-600 cursor-not-allowed border border-slate-850' 
+                                              : 'bg-slate-850 hover:bg-slate-800 text-slate-400'
+                                          }`}
+                                        >
+                                          Dismiss Dispute
+                                        </button>
+                                        <button
+                                          disabled={!adminSelectedDispute.responseFromPharmacy}
+                                          onClick={() => handleAdjudicateComplaint(adminSelectedDispute._id, 'penalize')}
+                                          className={`px-4 py-2 rounded text-xs font-bold transition flex items-center gap-1.5 ${
+                                            !adminSelectedDispute.responseFromPharmacy 
+                                              ? 'bg-slate-900 text-slate-600 cursor-not-allowed border border-slate-850' 
+                                              : 'bg-gradient-to-r from-amber-600 to-rose-600 hover:from-amber-500 hover:to-rose-500 text-white'
+                                          }`}
+                                        >
+                                          <AlertTriangle className="w-3.5 h-3.5" /> Enforce Penalty Alert
+                                        </button>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              ) : (
+                                <div className="h-[300px] flex flex-col items-center justify-center border border-dashed border-slate-800 bg-slate-950/30 rounded-2xl text-center p-6 gap-2">
+                                  <AlertOctagon className="w-8 h-8 text-indigo-500/30" />
+                                  <h4 className="text-xs font-bold text-slate-400">No Dispute Selected</h4>
+                                  <p className="text-[11px] text-slate-555 max-w-xs leading-relaxed">
+                                    Select a dispute ticket from the left list to review complaint details, invoice scans, store replies, and apply penalties.
+                                  </p>
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        );
+                      })()}
+                    </div>
+                  )}
+
+                  {/* 5. Directory Tab */}
+                  {adminTab === 'directory' && (() => {
+                    // Combine users and stores
+                    const combinedItems = [
+                      ...adminUsers.map(u => ({ ...u, type: 'user' })),
+                      ...adminPharmacies.map(s => ({ ...s, type: 'store', role: 'store' }))
+                    ];
+
+                    const filteredItems = combinedItems.filter(item => {
+                      // Filter by Directory sub-tab
+                      if (directoryTab === 'customer') {
+                        if (item.type !== 'user' || item.role !== 'customer') return false;
+                      } else if (directoryTab === 'pharmacy') {
+                        if (item.type !== 'user' || item.role !== 'pharmacy') return false;
+                      } else if (directoryTab === 'executive') {
+                        if (item.type !== 'user' || item.role !== 'executive') return false;
+                      } else if (directoryTab === 'admin') {
+                        if (item.type !== 'user' || item.role !== 'admin') return false;
+                      } else if (directoryTab === 'stores') {
+                        if (item.type !== 'store') return false;
+                      }
+
+                      // Filter by directorySearch string
+                      if (!directorySearch.trim()) return true;
+                      const q = directorySearch.toLowerCase();
+                      if (item.type === 'user') {
+                        return (item.name || '').toLowerCase().includes(q) || 
+                               (item.email || '').toLowerCase().includes(q);
+                      } else {
+                        return (item.name || '').toLowerCase().includes(q) || 
+                               (item.ownerName || '').toLowerCase().includes(q) || 
+                               (item.drugLicense || '').toLowerCase().includes(q);
+                      }
+                    });
+
+                    return (
+                      <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6 animate-fade-in min-h-[600px]">
+                        {selectedDirectoryItem ? (
+                          // Full-page detailed profile view (replacing directory listing)
+                          <div className="flex flex-col gap-6">
+                            {/* Header row */}
+                            <div className="flex justify-between items-center border-b border-slate-900 pb-4">
+                              <div className="flex items-center gap-3">
+                                <button
+                                  onClick={() => setSelectedDirectoryItem(null)}
+                                  className="px-3 py-1.5 text-xs font-bold bg-slate-900 border border-slate-800 rounded-lg text-slate-350 hover:bg-slate-800 transition"
+                                >
+                                  ← Back to Directory
+                                </button>
+                                <div>
+                                  <span className="text-[9px] text-slate-500 font-mono block uppercase">
+                                    {selectedDirectoryItem.type === 'user' ? 'USER PROFILE DOSSIER' : 'PHARMACY STORE PROFILE'}
+                                  </span>
+                                  <h3 className="text-base font-extrabold text-slate-100 mt-0.5">{selectedDirectoryItem.name}</h3>
+                                </div>
+                              </div>
+                              <span className={`px-2.5 py-1 rounded text-[10px] font-bold border uppercase tracking-wider ${
+                                selectedDirectoryItem.role === 'admin' ? 'bg-red-500/10 border-red-500/20 text-red-400' :
+                                selectedDirectoryItem.role === 'pharmacy' ? 'bg-teal-500/10 border-teal-500/20 text-teal-400' :
+                                selectedDirectoryItem.role === 'executive' ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400' :
+                                selectedDirectoryItem.role === 'store' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400 glow-verified' :
+                                'bg-slate-800 border-slate-850 text-slate-400'
+                              }`}>
+                                {selectedDirectoryItem.role.toUpperCase()}
                               </span>
                             </div>
 
-                            <p className="text-xs text-slate-300 font-mono bg-slate-950 p-2.5 rounded border border-slate-850">
-                              "{comp.description}"
-                            </p>
+                            {/* Detailed layout (No Hologram card graphics, structured fields only) */}
+                            {selectedDirectoryItem.type === 'user' ? (
+                              // User Profile Details
+                              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 flex flex-col gap-4">
+                                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wide border-b border-slate-800 pb-2">Account Registry Details</h4>
+                                  <div className="grid grid-cols-1 gap-3 font-mono text-xs">
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block">LEGAL NAME</span>
+                                      <span className="text-slate-200 font-bold block">{selectedDirectoryItem.name}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block">EMAIL ADDRESS</span>
+                                      <span className="text-slate-200 font-bold block">{selectedDirectoryItem.email}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block">ACCOUNT ROLE</span>
+                                      <span className="text-indigo-400 font-bold block uppercase">{selectedDirectoryItem.role}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block">UNIQUE ACCOUNT ID</span>
+                                      <span className="text-slate-400 block truncate">{selectedDirectoryItem._id}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block">REGISTRATION DATE</span>
+                                      <span className="text-slate-400 block">{new Date(selectedDirectoryItem.createdAt || '2026-03-01').toLocaleString()}</span>
+                                    </div>
+                                  </div>
+                                </div>
 
-                            <div className="flex justify-between items-center text-[10px] text-slate-500 font-mono">
-                              <span>Reported By: {comp.customerName}</span>
-                              <div className="flex gap-2">
-                                <button
-                                  onClick={() => handleAdjudicateComplaint(comp._id, 'dismiss')}
-                                  className="px-2.5 py-1 rounded bg-slate-850 hover:bg-slate-800 text-slate-400 transition"
-                                >
-                                  Dismiss Dispute
-                                </button>
-                                <button
-                                  onClick={() => handleAdjudicateComplaint(comp._id, 'penalize')}
-                                  className="px-3 py-1 rounded bg-gradient-to-r from-amber-600 to-rose-600 text-white font-bold transition flex items-center gap-1"
-                                >
-                                  <AlertTriangle className="w-3.5 h-3.5" /> Enforce Penalty Alert
-                                </button>
+                                <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 flex flex-col gap-4">
+                                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wide border-b border-slate-800 pb-2">Security Clearances & Actions</h4>
+                                  <div className="flex flex-col gap-3">
+                                    <div className="flex items-center justify-between text-xs font-mono">
+                                      <span className="text-slate-400">Security Clearance:</span>
+                                      <span className="px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20 font-bold">LEVEL 2 SECURE</span>
+                                    </div>
+                                    <div className="flex items-center justify-between text-xs font-mono">
+                                      <span className="text-slate-400">Platform Ban Status:</span>
+                                      <span className="px-2 py-0.5 rounded bg-slate-950 text-slate-400 border border-slate-800">ACTIVE & COMPLIANT</span>
+                                    </div>
+
+                                    {/* Cross-linking redirect for store owners */}
+                                    {selectedDirectoryItem.role === 'pharmacy' && (() => {
+                                      // Find corresponding pharmacy
+                                      const store = adminPharmacies.find(p => p.ownerId === selectedDirectoryItem._id || p.ownerName === selectedDirectoryItem.name);
+                                      if (store) {
+                                        return (
+                                          <div className="mt-4 pt-4 border-t border-slate-800 flex flex-col gap-2">
+                                            <span className="text-[10px] text-slate-400 font-mono">ASSOCIATED PHARMACY DETECTED</span>
+                                            <button
+                                              onClick={async () => {
+                                                setDirectoryTab('stores');
+                                                setSelectedDirectoryItem({ ...store, type: 'store', role: 'store' });
+                                                // Fetch inventory list
+                                                try {
+                                                  const inv = await api.get(`/pharmacies/inventory?pharmacyId=${store._id}`);
+                                                  setSelectedDirectoryItem(prev => ({ ...prev, _inventoryList: inv || [] }));
+                                                } catch (err) {}
+                                              }}
+                                              className="w-full text-left p-3 rounded-xl bg-teal-500/5 hover:bg-teal-500/10 border border-teal-500/20 text-xs font-bold text-teal-400 transition flex justify-between items-center"
+                                            >
+                                              <span>🏬 {store.name}</span>
+                                              <span className="text-[9px] font-mono bg-teal-500/15 px-2 py-0.5 rounded text-teal-300">View Live Inventory & DL →</span>
+                                            </button>
+                                          </div>
+                                        );
+                                      } else {
+                                        return (
+                                          <div className="mt-4 p-3 bg-slate-950 rounded-lg border border-slate-850 text-xs text-slate-550 font-mono italic">
+                                            No active pharmacy registered under this owner's ID yet.
+                                          </div>
+                                        );
+                                      }
+                                    })()}
+                                  </div>
+                                </div>
+                              </div>
+                            ) : (
+                              // Store Profile Details
+                              <div className="flex flex-col gap-6">
+                                <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                                  <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 flex flex-col gap-4">
+                                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wide border-b border-slate-800 pb-2">Pharmacy Documentation & Compliance</h4>
+                                    <div className="grid grid-cols-1 gap-3 font-mono text-xs">
+                                      <div>
+                                        <span className="text-[9px] text-slate-500 block">STORE NAME</span>
+                                        <span className="text-slate-200 font-bold block">{selectedDirectoryItem.name}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[9px] text-slate-500 block">PHYSICAL ADDRESS</span>
+                                        <span className="text-slate-350 block font-sans text-xs">{selectedDirectoryItem.address}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[9px] text-slate-500 block">DRUG LICENSE NUMBER</span>
+                                        <span className="text-slate-200 font-bold block">{selectedDirectoryItem.drugLicense}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[9px] text-slate-500 block">GST REGISTRATION NUMBER</span>
+                                        <span className="text-slate-200 font-bold block">{selectedDirectoryItem.gstNumber}</span>
+                                      </div>
+                                      <div>
+                                        <span className="text-[9px] text-slate-500 block">CONTACT DETAILS</span>
+                                        <span className="text-slate-200 block">{selectedDirectoryItem.contact}</span>
+                                      </div>
+                                    </div>
+                                  </div>
+
+                                  <div className="bg-slate-900 p-5 rounded-xl border border-slate-800 flex flex-col gap-4">
+                                    <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wide border-b border-slate-800 pb-2">Platform Ratings & Synchronization</h4>
+                                    <div className="grid grid-cols-1 gap-3 font-mono text-xs">
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-slate-400">TRUST SCORE BADGE</span>
+                                        <span className="text-teal-400 font-bold font-mono">{selectedDirectoryItem.trustScore || 100}% Trust Level</span>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-slate-400">WARNINGS PENALTY</span>
+                                        <span className={`font-bold ${selectedDirectoryItem.warningsCount > 0 ? 'text-red-400' : 'text-slate-300'}`}>
+                                          {selectedDirectoryItem.warningsCount || 0} / 3 Warnings Issued
+                                        </span>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-slate-400">BILLING INTEGRATOR</span>
+                                        <span className="text-slate-300 font-bold">{selectedDirectoryItem.billingSoftware || 'Disconnected'}</span>
+                                      </div>
+                                      <div className="flex items-center justify-between">
+                                        <span className="text-slate-400">SYNC SCHEDULE</span>
+                                        <span className="text-slate-300">{selectedDirectoryItem.inventoryUpdateFrequency || 'Manual Updates'}</span>
+                                      </div>
+
+                                      {/* Cross-linking redirect back to store owner */}
+                                      {(() => {
+                                        const owner = adminUsers.find(u => u._id === selectedDirectoryItem.ownerId || u.name === selectedDirectoryItem.ownerName);
+                                        if (owner) {
+                                          return (
+                                            <div className="mt-4 pt-4 border-t border-slate-800 flex flex-col gap-2">
+                                              <span className="text-[10px] text-slate-400 font-mono">REGISTERED PHARMACY OWNER</span>
+                                              <button
+                                                onClick={() => {
+                                                  setDirectoryTab('pharmacy');
+                                                  setSelectedDirectoryItem({ ...owner, type: 'user' });
+                                                }}
+                                                className="w-full text-left p-3 rounded-xl bg-indigo-500/5 hover:bg-indigo-500/10 border border-indigo-500/20 text-xs font-bold text-indigo-400 transition flex justify-between items-center"
+                                              >
+                                                <span>👤 {owner.name}</span>
+                                                <span className="text-[9px] font-mono bg-indigo-500/15 px-2 py-0.5 rounded text-indigo-300 font-bold">View Credentials Profile →</span>
+                                              </button>
+                                            </div>
+                                          );
+                                        }
+                                      })()}
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* Live Inventory STOCK Register */}
+                                <div className="flex flex-col gap-3 bg-slate-900 p-5 rounded-xl border border-slate-800">
+                                  <h4 className="text-xs font-bold text-slate-200 uppercase tracking-wide border-b border-slate-800 pb-2">Live Inventory Stock Register</h4>
+                                  {selectedDirectoryItem._inventoryList && selectedDirectoryItem._inventoryList.length > 0 ? (
+                                    <div className="overflow-x-auto border border-slate-800 rounded-xl mt-2">
+                                      <table className="w-full text-[11px] font-mono text-left text-slate-400">
+                                        <thead className="bg-slate-950 text-slate-500 uppercase text-[9px] border-b border-slate-800">
+                                          <tr>
+                                            <th className="py-3 px-4">Medicine Catalog Item</th>
+                                            <th className="py-3 px-4">Hyperlocal Selling Price</th>
+                                            <th className="py-3 px-4">Stock Quantity</th>
+                                          </tr>
+                                        </thead>
+                                        <tbody>
+                                          {selectedDirectoryItem._inventoryList.map(item => (
+                                            <tr key={item._id} className="border-b border-slate-950 last:border-b-0 hover:bg-slate-950/40">
+                                              <td className="py-2.5 px-4 font-bold text-slate-350">{item.medicineName}</td>
+                                              <td className="py-2.5 px-4 text-teal-400 font-bold">${item.price}</td>
+                                              <td className="py-2.5 px-4 text-slate-200">{item.stock}</td>
+                                            </tr>
+                                          ))}
+                                        </tbody>
+                                      </table>
+                                    </div>
+                                  ) : (
+                                    <div className="py-8 text-center text-slate-550 text-xs font-mono border border-slate-800 border-dashed rounded-xl mt-2">
+                                      No live inventory synchronized records loaded for this pharmacy.
+                                    </div>
+                                  )}
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                        ) : (
+                          // Directory List/Table Full-page
+                          <div className="flex flex-col gap-6">
+                            <div className="flex flex-col md:flex-row justify-between md:items-center gap-4">
+                              <div>
+                                <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                                  <User className="w-4 h-4 text-indigo-400" /> Platform Directory Register
+                                </h3>
+                                <p className="text-xs text-slate-400 mt-1">Consolidated repository of all customers, pharmacy owners, deployed inspectors, and store locations.</p>
+                              </div>
+
+                              {/* Search directory input */}
+                              <div className="relative w-full md:w-80">
+                                <Search className="w-4 h-4 text-slate-500 absolute left-3 top-3" />
+                                <input
+                                  type="text"
+                                  placeholder="Search name, email, license, owner..."
+                                  value={directorySearch}
+                                  onChange={(e) => setDirectorySearch(e.target.value)}
+                                  className="w-full bg-slate-900 border border-slate-800 rounded-xl py-2 pl-9 pr-4 text-xs text-white focus:outline-none focus:border-indigo-500 transition"
+                                />
                               </div>
                             </div>
+
+                            {/* Sub-tab Filter Bar */}
+                            <div className="flex flex-wrap gap-1 bg-slate-900 p-1 rounded-xl border border-slate-800 self-start">
+                              {[
+                                { key: 'all', label: 'All Records' },
+                                { key: 'customer', label: 'Customers' },
+                                { key: 'pharmacy', label: 'Store Owners' },
+                                { key: 'executive', label: 'Inspectors' },
+                                { key: 'stores', label: 'Pharmacies' },
+                                { key: 'admin', label: 'Admins' }
+                              ].map(subTab => (
+                                <button
+                                  key={subTab.key}
+                                  onClick={() => setDirectoryTab(subTab.key)}
+                                  className={`px-3 py-2 text-xs font-bold rounded-lg transition uppercase ${
+                                    directoryTab === subTab.key 
+                                      ? 'bg-indigo-600 text-white shadow-md' 
+                                      : 'text-slate-400 hover:text-slate-200'
+                                  }`}
+                                >
+                                  {subTab.label}
+                                </button>
+                              ))}
+                            </div>
+
+                            {/* Directory Listing Table */}
+                            <div className="overflow-x-auto border border-slate-850 rounded-2xl">
+                              <table className="w-full text-xs font-mono text-left text-slate-400">
+                                <thead className="bg-slate-900 text-slate-500 uppercase text-[9px] border-b border-slate-850">
+                                  <tr>
+                                    <th className="py-3 px-4">Entity Name</th>
+                                    <th className="py-3 px-4">Identifier / Email / DL</th>
+                                    <th className="py-3 px-4">Platform Role / Category</th>
+                                    <th className="py-3 px-4 text-right">Actions</th>
+                                  </tr>
+                                </thead>
+                                <tbody>
+                                  {filteredItems.map(item => (
+                                    <tr 
+                                      key={item._id} 
+                                      onClick={async () => {
+                                        if (item.type === 'store') {
+                                          setSelectedDirectoryItem({ ...item, type: 'store', role: 'store' });
+                                          try {
+                                            const inv = await api.get(`/pharmacies/inventory?pharmacyId=${item._id}`);
+                                            setSelectedDirectoryItem(prev => ({ ...prev, _inventoryList: inv || [] }));
+                                          } catch (err) {}
+                                        } else {
+                                          setSelectedDirectoryItem({ ...item, type: 'user' });
+                                        }
+                                      }}
+                                      className="border-b border-slate-900 last:border-b-0 hover:bg-slate-900/40 cursor-pointer transition"
+                                    >
+                                      <td className="py-3 px-4 font-bold text-slate-200">
+                                        <span className="flex items-center gap-2">
+                                          {item.type === 'store' ? '🏬' : '👤'} {item.name}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 px-4 text-slate-400">
+                                        {item.type === 'user' ? item.email : `DL: ${item.drugLicense}`}
+                                      </td>
+                                      <td className="py-3 px-4">
+                                        <span className={`px-1.5 py-0.5 rounded text-[8px] font-mono font-bold uppercase border ${
+                                          item.role === 'admin' ? 'bg-red-500/10 text-red-400 border-red-500/20' :
+                                          item.role === 'pharmacy' ? 'bg-teal-500/10 text-teal-400 border-teal-500/20' :
+                                          item.role === 'executive' ? 'bg-indigo-500/10 text-indigo-400 border-indigo-500/20' :
+                                          item.role === 'store' ? 'bg-emerald-500/10 text-emerald-400 border-emerald-500/20 glow-verified' :
+                                          'bg-slate-800 border-slate-850 text-slate-500'
+                                        }`}>
+                                          {item.role}
+                                        </span>
+                                      </td>
+                                      <td className="py-3 px-4 text-right">
+                                        <span className="text-[10px] text-indigo-400 hover:text-indigo-300 font-bold">
+                                          View Details →
+                                        </span>
+                                      </td>
+                                    </tr>
+                                  ))}
+                                  {filteredItems.length === 0 && (
+                                    <tr>
+                                      <td colSpan={4} className="py-8 text-center text-slate-550 text-xs font-mono">
+                                        No entries found matching directory filters and search query.
+                                      </td>
+                                    </tr>
+                                  )}
+                                </tbody>
+                              </table>
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {/* 6. Platform Logs Tab */}
+                  {adminTab === 'logs' && (
+                    <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4 animate-fade-in">
+                      <div className="border-b border-slate-900 pb-3">
+                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                          <FileText className="w-4 h-4 text-slate-400" /> Platform Compliance Security Audit Trail
+                        </h3>
+                        <p className="text-xs text-slate-400 mt-1">Strict tamper-proof log trail recording pharmacy registrations, executive audit reports, and billing sync actions.</p>
+                      </div>
+
+                      <div className="h-[480px] overflow-y-auto border border-slate-800 bg-slate-900 rounded-xl p-4 flex flex-col gap-2 font-mono text-[10px]">
+                        {adminLogs.map((log, i) => (
+                          <div key={i} className="border-b border-slate-800 pb-2 last:border-b-0 hover:bg-slate-950/20 transition p-1 rounded">
+                            <span className="text-slate-500">[{log.timestamp ? new Date(log.timestamp).toLocaleString() : 'Time'}]</span>{' '}
+                            <span className="text-teal-400 uppercase font-bold">({log.actorRole})</span>{' '}
+                            <span className="text-sm font-bold text-slate-200">{log.actorName}</span>{' '}
+                            <span className="text-indigo-400 font-bold bg-indigo-500/5 border border-indigo-500/10 px-1 py-0.5 rounded text-[9px]">{log.action}</span>{' '}
+                            <p className="text-slate-350 font-sans text-xs mt-1 bg-slate-950/30 p-1.5 rounded">{log.details}</p>
                           </div>
                         ))}
                       </div>
-                    ) : (
-                      <div className="py-6 border border-slate-900 border-dashed rounded-xl text-center text-slate-500 text-xs font-mono">
-                        Zero active pricing mismatches flagged.
-                      </div>
-                    )}
-                  </div>
-
-                  {/* Audit Logs Workspace Viewer */}
-                  <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4">
-                    <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                      <FileText className="w-4 h-4 text-slate-400" /> Platform Compliance Security Audit Trail
-                    </h3>
-                    <p className="text-xs text-slate-400">Strict tamper-proof log trail recording pharmacy registrations, executive audit reports, and billing sync actions.</p>
-
-                    <div className="h-48 overflow-y-auto border border-slate-800 bg-slate-900 rounded-xl p-3.5 flex flex-col gap-2 font-mono text-[10px]">
-                      {adminLogs.map((log, i) => (
-                        <div key={i} className="border-b border-slate-800 pb-1.5 last:border-b-0">
-                          <span className="text-slate-500">[{log.timestamp?.split('T')[1]?.slice(0,8) || 'Time'}]</span>{' '}
-                          <span className="text-teal-400 uppercase">({log.actorRole})</span>{' '}
-                          <span className="text-sm font-bold text-slate-100 font-bold">{log.actorName}</span>{' '}
-                          <span className="text-slate-400">{log.action}:</span>{' '}
-                          <span className="text-slate-300 font-sans">{log.details}</span>
-                        </div>
-                      ))}
                     </div>
-                  </div>
+                  )}
                 </div>
               )}
           </div>
@@ -3068,6 +4161,92 @@ export default function App() {
                 className="flex-1 bg-teal-500 hover:bg-teal-400 text-slate-950 font-extrabold py-2.5 px-4 rounded-xl text-xs transition shadow-lg shadow-teal-500/20"
               >
                 Confirm & Request
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {selectedDisputeDetail && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl flex flex-col gap-5 relative overflow-hidden">
+            {/* Header */}
+            <div className="flex justify-between items-start border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[10px] font-mono text-slate-500 uppercase tracking-widest">Pricing Violation Ticket Particulars</span>
+                <h3 className="text-base font-bold text-slate-100 mt-1 flex items-center gap-2">
+                  <AlertOctagon className="w-5 h-5 text-rose-500" />
+                  Dispute Details
+                </h3>
+              </div>
+              <button 
+                onClick={() => setSelectedDisputeDetail(null)}
+                className="text-slate-400 hover:text-slate-200 text-sm font-bold bg-slate-800/80 p-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-800 transition"
+              >
+                ✕ Close
+              </button>
+            </div>
+
+            {/* Body */}
+            <div className="flex flex-col gap-4 text-xs font-mono">
+              <div className="grid grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
+                <div>
+                  <span className="text-[9px] text-slate-500 block uppercase">Dispute ID</span>
+                  <span className="font-bold text-slate-200 text-[10px] truncate block">{selectedDisputeDetail._id}</span>
+                </div>
+                <div>
+                  <span className="text-[9px] text-slate-500 block uppercase">Ticket Status</span>
+                  <span className={`inline-block font-bold mt-1 px-2 py-0.5 rounded text-[9px] ${
+                    selectedDisputeDetail.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
+                    selectedDisputeDetail.status === 'Dismissed' ? 'bg-slate-800 text-slate-400' :
+                    selectedDisputeDetail.responseFromPharmacy ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
+                    'bg-amber-500/10 text-amber-400 animate-pulse border border-amber-500/20'
+                  }`}>
+                    {selectedDisputeDetail.status === 'Pending'
+                      ? (selectedDisputeDetail.responseFromPharmacy ? 'Under Admin Review' : 'Awaiting Store Response')
+                      : selectedDisputeDetail.status}
+                  </span>
+                </div>
+                <div>
+                  <span className="text-[9px] text-slate-500 block uppercase">Accused Store</span>
+                  <span className="font-bold text-slate-200 font-sans mt-0.5 block">{selectedDisputeDetail.pharmacyName}</span>
+                </div>
+                <div>
+                  <span className="text-[9px] text-slate-500 block uppercase">Violation Type</span>
+                  <span className="font-bold text-red-400 mt-0.5 block">{selectedDisputeDetail.type}</span>
+                </div>
+              </div>
+
+              {/* Description */}
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Customer Complaint Description</span>
+                <p className="text-slate-300 text-[11px] leading-relaxed italic">
+                  "{selectedDisputeDetail.description}"
+                </p>
+              </div>
+
+              {/* Store Response */}
+              <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Pharmacy Owner Response / Appeal</span>
+                {selectedDisputeDetail.responseFromPharmacy ? (
+                  <p className="text-teal-400 text-[11px] font-bold leading-relaxed italic bg-teal-500/5 p-2 rounded border border-teal-500/10">
+                    "{selectedDisputeDetail.responseFromPharmacy}"
+                  </p>
+                ) : (
+                  <p className="text-slate-550 text-[11px] leading-relaxed italic">
+                    Awaiting response from pharmacy owner.
+                  </p>
+                )}
+              </div>
+            </div>
+
+            {/* Footer buttons */}
+            <div className="flex justify-end gap-3 mt-1">
+              <button
+                onClick={() => setSelectedDisputeDetail(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-6 rounded-xl text-xs transition border border-slate-700"
+              >
+                Close Ticket View
               </button>
             </div>
           </div>

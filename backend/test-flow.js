@@ -68,8 +68,8 @@ async function runTests() {
     // 3. Request Verification Visit (Pharmacy owner)
     console.log('🔄 Step 3: Logging in as Pharmacy Owner...');
     const ownerAuth = await request('/auth/login', 'POST', {
-      email: 'pharmacy@medsafe.com',
-      password: 'password123'
+      email: 'pharmacy@gmail.com',
+      password: '123456'
     });
     const ownerToken = ownerAuth.token;
     
@@ -85,10 +85,14 @@ async function runTests() {
 
     // 4. Admin Assigns Executive
     console.log('🔄 Step 4: Admin assigns Deployed Inspector...');
-    const executiveId = 'mock_vikram'; // Seeded inspector id or standard role
+    const executives = await request('/admin/executives', 'GET', null, adminToken);
+    const execVikram = executives.find(e => e.email === 'executive@medsafe.com');
+    if (!execVikram) {
+      throw new Error('Could not find Inspector Vikram in seeded database!');
+    }
     await request('/admin/assign-executive', 'POST', {
       pharmacyId: lifecare._id,
-      executiveId: '000000000000000000000003', // Deployed Inspector Vikram
+      executiveId: execVikram._id,
       visitDate: '2026-06-05'
     }, adminToken);
     console.log('✅ Inspector assigned successfully. Status updated to Executive Assigned.\n');
@@ -144,19 +148,22 @@ async function runTests() {
     }, customerToken);
     console.log(`✅ Dispute submitted. Price mismatch OCR match flagged: [${compRes.ocrPriceAlert}]\n`);
 
+    // 8b. Store Owner responds to complaint
+    console.log('🔄 Step 8b: Store Owner responds to pricing dispute...');
+    const newlyCreatedComplaintId = compRes.complaint._id;
+    const resVal = await request('/pharmacies/respond-complaint', 'POST', {
+      complaintId: newlyCreatedComplaintId,
+      response: 'This was a pricing sync error due to inventory POS update delay. We have resolved it.'
+    }, ownerToken);
+    console.log('✅ Pharmacy owner response appeal submitted.\n');
+
     // 9. Admin Adjudicates Complaint
     console.log('🔄 Step 9: Admin penalizing fraud...');
-    // Find complaint
-    const complaints = await request('/admin/complaints', 'GET', null, adminToken);
-    const myComp = complaints.find(c => c.pharmacyId === lifecare._id);
-    
-    if (myComp) {
-      await request('/admin/complaints/adjudicate', 'POST', {
-        complaintId: myComp._id,
-        action: 'penalize'
-      }, adminToken);
-      console.log('✅ Enforcement penalty completed. Mismatch warned and store trust score deducted by 20 points.\n');
-    }
+    await request('/admin/complaints/adjudicate', 'POST', {
+      complaintId: newlyCreatedComplaintId,
+      action: 'penalize'
+    }, adminToken);
+    console.log('✅ Enforcement penalty completed. Mismatch warned and store trust score deducted by 20 points.\n');
 
     console.log('🏆 MEDSAFE API INTEGRATION TEST COMPLETED SUCCESSFULLY WITH 100% COMPLIANCE!');
     process.exit(0);
