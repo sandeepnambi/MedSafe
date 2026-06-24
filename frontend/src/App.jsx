@@ -10,6 +10,7 @@ import {
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar
 } from 'recharts';
 import { api, checkServerHealth } from './utils/api';
+import LandingPage from './LandingPage';
 
 export default function App() {
   // Beautify username helper (e.g., SANDEEP.NAMBIO8 -> Sandeep)
@@ -25,6 +26,7 @@ export default function App() {
   // Global States
   const [activeRole, setActiveRole] = useState('customer'); // customer, pharmacy, executive, admin
   const [currentUser, setCurrentUser] = useState(null);
+  const [showAuth, setShowAuth] = useState(false);
   const [serverOnline, setServerOnline] = useState(false);
   const [loading, setLoading] = useState(false);
   const [notification, setNotification] = useState(null);
@@ -377,6 +379,7 @@ export default function App() {
     localStorage.removeItem('medsafe_token');
     localStorage.removeItem('medsafe_current_user');
     setCurrentUser(null);
+    setShowAuth(false);
     setMyPharmacy(null);
     setPharmacyInventory([]);
     setSearchResults([]);
@@ -817,6 +820,16 @@ export default function App() {
     }
   };
 
+  if (!currentUser && !showAuth) {
+    return (
+      <LandingPage 
+        onLogin={() => { setIsRegister(false); setShowAuth(true); }}
+        onRegister={() => { setIsRegister(true); setShowAuth(true); }}
+        onRegisterPharmacy={() => { setIsRegister(true); setAuthRole('pharmacy'); setShowAuth(true); }}
+      />
+    );
+  }
+
   if (!currentUser) {
     return (
       <div className="min-h-screen bg-slate-900 text-slate-100 flex flex-col font-sans">
@@ -834,7 +847,7 @@ export default function App() {
 
         {/* Auth Screen Header */}
         <header className="glass border-b border-slate-800 px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 cursor-pointer" onClick={() => setShowAuth(false)}>
             <div className="bg-teal-500/10 p-2.5 rounded-xl border border-teal-500/25 relative glow-verified">
               <ShieldCheck className="w-6 h-6 text-teal-400" />
             </div>
@@ -845,6 +858,13 @@ export default function App() {
               <p className="text-[10px] text-slate-400 font-mono">HYPERLOCAL MEDICINE SECURITY & TRANSPARENCY</p>
             </div>
           </div>
+          <button 
+            type="button"
+            onClick={() => setShowAuth(false)}
+            className="text-xs bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl transition font-mono font-bold"
+          >
+            ← Back to Home
+          </button>
         </header>
 
         {/* Main Auth Container */}
@@ -863,7 +883,7 @@ export default function App() {
             <div className="bg-slate-950 p-1 rounded-xl border border-slate-800 flex gap-1">
               <button
                 type="button"
-                onClick={() => { setIsRegister(false); triggerNotification('Swapped to Sign In Panel'); }}
+                onClick={() => { setIsRegister(false); }}
                 className={`flex-1 text-center py-2 rounded-lg text-xs font-bold transition ${
                   !isRegister ? 'bg-teal-500 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -872,7 +892,7 @@ export default function App() {
               </button>
               <button
                 type="button"
-                onClick={() => { setIsRegister(true); triggerNotification('Swapped to Register Panel'); }}
+                onClick={() => { setIsRegister(true); }}
                 className={`flex-1 text-center py-2 rounded-lg text-xs font-bold transition ${
                   isRegister ? 'bg-teal-500 text-white shadow-lg' : 'text-slate-400 hover:text-slate-200'
                 }`}
@@ -932,7 +952,7 @@ export default function App() {
                     >
                       <option value="customer">Customer</option>
                       <option value="pharmacy">Pharmacy Store Owner</option>
-                      <option value="executive">Verification Deployed Inspector</option>
+                      <option value="executive">Inspector</option>
                       <option value="admin">SuperAdmin</option>
                     </select>
                   </div>
@@ -1050,7 +1070,7 @@ export default function App() {
               title={currentUser.role === 'executive' ? 'View Inspector Credentials' : 'View Health Profile Dashboard'}
             >
               <span className="text-xs font-bold text-slate-100 leading-none border-b border-dashed border-teal-500/30 pb-0.5">{beautifyName(currentUser.name)}</span>
-              <span className="text-[9px] font-mono text-teal-400 capitalize mt-0.5">{currentUser.role === 'executive' ? 'Verification Deployed Inspector' : currentUser.role}</span>
+              <span className="text-[9px] font-mono text-teal-400 capitalize mt-0.5">{currentUser.role === 'executive' ? 'Inspector' : currentUser.role}</span>
             </div>
             <div 
               onClick={() => {
@@ -2712,7 +2732,7 @@ export default function App() {
                               <span className="text-xs font-bold text-indigo-400 border-b border-slate-800 pb-1.5 font-sans">B. Professional Clearance</span>
                               <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
                                 <span className="text-slate-500 font-sans">Role Designation:</span>
-                                <span className="font-bold text-slate-200 font-sans">Verification Deployed Inspector</span>
+                                <span className="font-bold text-slate-200 font-sans">Inspector</span>
                               </div>
                               <div className="flex justify-between items-center py-1.5 border-b border-slate-950">
                                 <span className="text-slate-500 font-sans">Clearance Status:</span>
