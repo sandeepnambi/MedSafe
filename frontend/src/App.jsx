@@ -4,7 +4,7 @@ import {
   Settings, Award, RefreshCw, Barcode, ClipboardList, CheckCircle2, 
   XCircle, Truck, TrendingUp, HelpCircle, User, Store, 
   Lock, Eye, Plus, Trash2, FileText, Check, AlertOctagon, RefreshCcw,
-  Heart, History, Radio
+  Heart, History, Radio, Camera, Upload
 } from 'lucide-react';
 import { 
   AreaChart, Area, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar
@@ -59,6 +59,18 @@ export default function App() {
   const [complaintDesc, setComplaintDesc] = useState('');
   const [mockInvoiceText, setMockInvoiceText] = useState('Bill No: 9941\nMedicine: Paracetamol\nPrice: 45\nQty: 1');
   const [complaintStatus, setComplaintStatus] = useState('');
+
+  // OCR Image Upload & Verification States
+  const [disputeImage, setDisputeImage] = useState('');
+  const [disputeImageName, setDisputeImageName] = useState('');
+  const [showDisputeImagePreview, setShowDisputeImagePreview] = useState(false);
+  const [isOcrParsing, setIsOcrParsing] = useState(false);
+  const [showCameraModal, setShowCameraModal] = useState(false);
+
+  const cameraInputRef = React.useRef(null);
+  const galleryInputRef = React.useRef(null);
+  const videoRef = React.useRef(null);
+  const streamRef = React.useRef(null);
 
   // Recommended Medicines Seeding (clinical images from professional stock)
   const recommendedMedicines = [
@@ -124,6 +136,38 @@ export default function App() {
     }
   ];
 
+  const getMedImageAndDesc = (med) => {
+    const match = recommendedMedicines.find(r => 
+      r.name.toLowerCase() === med.name.toLowerCase() || 
+      (r.brandName || '').toLowerCase() === (med.brandName || '').toLowerCase()
+    );
+    if (match) {
+      return {
+        image: match.image,
+        desc: match.desc || 'Verified medical formulary item.'
+      };
+    }
+
+    let image = 'https://images.unsplash.com/photo-1584017911766-d451b3d0e843?auto=format&fit=crop&w=400&q=80';
+    let desc = `Verified therapeutic treatment matching generic composition of ${med.genericName || med.name}.`;
+
+    if (med.category === 'Painkiller') {
+      image = 'https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=400&q=80';
+      desc = `Effective anti-inflammatory medication for clinical pain and fever management.`;
+    } else if (med.category === 'Antibiotic') {
+      image = 'https://images.unsplash.com/photo-1550572017-edd951b55104?auto=format&fit=crop&w=400&q=80';
+      desc = `Broad-spectrum prescription antibiotic for targeting bacterial compliance.`;
+    } else if (med.category === 'Antihyperglycemic') {
+      image = 'https://images.unsplash.com/photo-1471864190281-a93a3070b6de?auto=format&fit=crop&w=400&q=80';
+      desc = `Essential blood glucose regulator for cardiovascular and endocrine control.`;
+    } else if (med.category === 'Statin') {
+      image = 'https://images.unsplash.com/photo-1628771065518-0d82f1938462?auto=format&fit=crop&w=400&q=80';
+      desc = `Cardiovascular lipid stabilizer for high cholesterol prevention and management.`;
+    }
+
+    return { image, desc };
+  };
+
   // Widescreen Customer Profile states
   const [favorites, setFavorites] = useState(() => {
     const saved = localStorage.getItem('medsafe_favorites');
@@ -169,6 +213,7 @@ export default function App() {
   const [pharmacyInventory, setPharmacyInventory] = useState([]);
   const [newInvItem, setNewInvItem] = useState({ medicineId: '', price: '', stock: '' });
   const [allMedicines, setAllMedicines] = useState([]);
+  const [customerMedicines, setCustomerMedicines] = useState([]);
   const [billingSoftwareName, setBillingSoftwareName] = useState('MedSafe-Link v2');
 
   // Executive Panel States
@@ -426,6 +471,9 @@ export default function App() {
       
       const stores = await api.get('/customer/pharmacies');
       setVerifiedPharmacies(stores || []);
+
+      const meds = await api.get('/customer/medicines');
+      setCustomerMedicines(meds || []);
     } catch (err) {
       console.error('Failed to load complaints:', err);
     }
@@ -473,7 +521,7 @@ export default function App() {
     setSelectedMedicine(med);
     setLoading(true);
     try {
-      const data = await api.get(`/customer/search?query=${med.name}`);
+      const data = await api.get(`/customer/search?medicineId=${med._id}&query=${med.name}`);
       setSearchResults(data || []);
       setSelectedResults([]);
       setShowMap(false);
@@ -664,6 +712,92 @@ export default function App() {
     }
   };
 
+  const runOcrParsing = async (base64Data, filename) => {
+    setDisputeImageName(filename);
+    setDisputeImage(base64Data);
+    setShowDisputeImagePreview(false); // Do not unfold immediately
+    setIsOcrParsing(true);
+    
+    try {
+      // Call backend to upload to Cloudinary and parse with OCR Space
+      const res = await api.post('/ocr/parse', { disputeImage: base64Data });
+      
+      // Update state with real Cloudinary URL and parsed text
+      setDisputeImage(res.imageUrl);
+      setMockInvoiceText(res.parsedText || 'No text parsed.');
+      
+      triggerNotification('Legit OCR complete! Uploaded to Cloudinary and text pre-filled.', 'success');
+    } catch (err) {
+      console.error(err);
+      triggerNotification('OCR/Cloudinary failed: ' + err.message, 'error');
+    } finally {
+      setIsOcrParsing(false);
+    }
+  };
+
+  const handleReceiptFileChange = (e) => {
+    const file = e.target.files[0];
+    if (!file) return;
+
+    const reader = new FileReader();
+    reader.onloadend = async () => {
+      await runOcrParsing(reader.result, file.name);
+    };
+    reader.readAsDataURL(file);
+  };
+
+  const startCamera = async () => {
+    setShowCameraModal(true);
+    setTimeout(async () => {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({
+          video: { facingMode: 'environment', width: 640, height: 480 }
+        });
+        streamRef.current = stream;
+        if (videoRef.current) {
+          videoRef.current.srcObject = stream;
+        }
+      } catch (err) {
+        triggerNotification('Failed to access camera: ' + err.message, 'error');
+        setShowCameraModal(false);
+      }
+    }, 100);
+  };
+
+  const stopCamera = () => {
+    if (streamRef.current) {
+      streamRef.current.getTracks().forEach(track => track.stop());
+      streamRef.current = null;
+    }
+    setShowCameraModal(false);
+  };
+
+  const capturePhoto = async () => {
+    if (!videoRef.current) return;
+    const video = videoRef.current;
+    
+    const canvas = document.createElement('canvas');
+    canvas.width = video.videoWidth || 640;
+    canvas.height = video.videoHeight || 480;
+    const ctx = canvas.getContext('2d');
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+    
+    const base64Image = canvas.toDataURL('image/jpeg');
+    stopCamera();
+    
+    await runOcrParsing(base64Image, 'captured_invoice.jpg');
+  };
+
+  const handleRemoveReceiptImage = () => {
+    setDisputeImage('');
+    setDisputeImageName('');
+    setMockInvoiceText('');
+    setShowDisputeImagePreview(false);
+    if (cameraInputRef.current) cameraInputRef.current.value = '';
+    if (galleryInputRef.current) galleryInputRef.current.value = '';
+    triggerNotification('Receipt image removed.', 'info');
+  };
+
   // Customer Lodge Price Mismatch Dispute (Anti-Fraud Complaint Logging)
   const handleLodgeComplaint = async (e) => {
     e.preventDefault();
@@ -671,12 +805,17 @@ export default function App() {
       triggerNotification('Please choose pharmacy and fill details', 'warning');
       return;
     }
+    if (!disputeImage) {
+      triggerNotification('⚠️ Receipt image is mandatory. Please capture or upload an invoice picture.', 'error');
+      return;
+    }
     try {
       const res = await api.post('/customer/lodge-complaint', {
         pharmacyId: complaintPharmacyId,
         type: complaintType,
         description: complaintDesc,
-        mockInvoiceText: complaintType === 'Price Mismatch' ? mockInvoiceText : ''
+        mockInvoiceText: complaintType === 'Price Mismatch' ? mockInvoiceText : '',
+        disputeImage: disputeImage
       });
       if (res.ocrPriceAlert) {
         triggerNotification('⚠️ Price mismatch detected on invoice! This issue has been logged for immediate audit review.', 'error');
@@ -684,6 +823,9 @@ export default function App() {
         triggerNotification('Dispute uploaded successfully. Audit reference initialized.');
       }
       setComplaintDesc('');
+      setDisputeImage('');
+      setDisputeImageName('');
+      setShowDisputeImagePreview(false);
       setComplaintStatus('submitted');
       handleCustomerSearch(searchQuery);
     } catch (err) {
@@ -730,6 +872,7 @@ export default function App() {
         staffTrained: false
       });
       setExecutiveNotes('');
+      setActiveAssignment(null);
       loadExecutiveAssignments();
     } catch (err) {
       triggerNotification(err.message, 'error');
@@ -1236,101 +1379,99 @@ export default function App() {
                               <span className="text-[10px] text-slate-500 font-mono">VERIFIED STOCK CATALOG</span>
                             </div>
 
-                            {recommendedMedicines.filter(med => {
-                              const q = searchQuery.toLowerCase().trim();
-                              if (!q) return true;
-                              return (
-                                med.name.toLowerCase().includes(q) ||
-                                med.brandName.toLowerCase().includes(q) ||
-                                med.genericName.toLowerCase().includes(q) ||
-                                med.saltComposition?.toLowerCase().includes(q) ||
-                                med.category.toLowerCase().includes(q)
-                              );
-                            }).length > 0 ? (
-                              <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-                                {recommendedMedicines
-                                  .filter(med => {
-                                    const q = searchQuery.toLowerCase().trim();
-                                    if (!q) return true;
-                                    return (
-                                      med.name.toLowerCase().includes(q) ||
-                                      med.brandName.toLowerCase().includes(q) ||
-                                      med.genericName.toLowerCase().includes(q) ||
-                                      med.saltComposition?.toLowerCase().includes(q) ||
-                                      med.category.toLowerCase().includes(q)
-                                    );
-                                  })
-                                  .map((med) => {
-                                    const isFav = favorites.includes(med._id);
-                                    return (
-                                      <div
-                                        key={med._id}
-                                        className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition-all duration-300 flex flex-col group relative"
-                                      >
-                                        {/* Medicine Stock Image with Favorite Overlay */}
-                                        <div className="h-44 relative overflow-hidden bg-slate-900">
-                                          <img
-                                            src={med.image}
-                                            alt={med.name}
-                                            className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
-                                          />
-                                          
-                                          {/* Favorite toggle overlay button */}
-                                          <button
-                                            onClick={(e) => {
-                                              e.stopPropagation();
-                                              toggleFavorite(med._id);
-                                            }}
-                                            className={`absolute top-3 right-3 p-2.5 rounded-full border transition duration-200 ${
-                                              isFav
-                                                ? 'bg-rose-500/20 border-rose-500 text-rose-500 glow-verified'
-                                                : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-400/50'
-                                            }`}
-                                            title={isFav ? "Remove from Favorites" : "Add to Favorites"}
-                                          >
-                                            <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
-                                          </button>
+                            {(() => {
+                              const displayMeds = customerMedicines.length > 0 ? customerMedicines : recommendedMedicines;
+                              const filtered = displayMeds.filter(med => {
+                                const q = searchQuery.toLowerCase().trim();
+                                if (!q) return true;
+                                return (
+                                  (med.name || '').toLowerCase().includes(q) ||
+                                  (med.brandName || '').toLowerCase().includes(q) ||
+                                  (med.genericName || '').toLowerCase().includes(q) ||
+                                  (med.saltComposition || '').toLowerCase().includes(q) ||
+                                  (med.category || '').toLowerCase().includes(q)
+                                );
+                              });
 
-                                          <span className="absolute bottom-3 left-4 px-2 py-0.5 rounded text-[10px] bg-teal-500/90 text-slate-950 font-bold uppercase tracking-wider font-mono">
-                                            {med.category}
-                                          </span>
-                                        </div>
+                              if (filtered.length > 0) {
+                                return (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
+                                    {filtered.map((med) => {
+                                      const isFav = favorites.includes(med._id);
+                                      const { image, desc } = getMedImageAndDesc(med);
+                                      return (
+                                        <div
+                                          key={med._id}
+                                          className="bg-slate-950 border border-slate-800 rounded-2xl overflow-hidden hover:border-slate-700 transition-all duration-300 flex flex-col group relative"
+                                        >
+                                          {/* Medicine Stock Image with Favorite Overlay */}
+                                          <div className="h-44 relative overflow-hidden bg-slate-900">
+                                            <img
+                                              src={image}
+                                              alt={med.name}
+                                              className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-105"
+                                            />
+                                            
+                                            {/* Favorite toggle overlay button */}
+                                            <button
+                                              onClick={(e) => {
+                                                e.stopPropagation();
+                                                toggleFavorite(med._id);
+                                              }}
+                                              className={`absolute top-3 right-3 p-2.5 rounded-full border transition duration-200 ${
+                                                isFav
+                                                  ? 'bg-rose-500/20 border-rose-500 text-rose-500 glow-verified'
+                                                  : 'bg-slate-950/80 border-slate-800 text-slate-400 hover:text-rose-400 hover:border-rose-400/50'
+                                              }`}
+                                              title={isFav ? "Remove from Favorites" : "Add to Favorites"}
+                                            >
+                                              <Heart className={`w-4 h-4 ${isFav ? 'fill-current' : ''}`} />
+                                            </button>
 
-                                        {/* Body Info */}
-                                        <div className="p-5 flex-1 flex flex-col justify-between gap-4">
-                                          <div>
-                                            <h4 className="text-sm font-bold text-slate-100 group-hover:text-teal-400 transition">
-                                              {med.name}
-                                            </h4>
-                                            <p className="text-xs text-slate-400 font-semibold font-mono mt-0.5">
-                                              {med.brandName} • <span className="text-slate-500 font-normal">{med.genericName}</span>
-                                            </p>
-                                            <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
-                                              {med.desc}
-                                            </p>
+                                            <span className="absolute bottom-3 left-4 px-2 py-0.5 rounded text-[10px] bg-teal-500/90 text-slate-950 font-bold uppercase tracking-wider font-mono">
+                                              {med.category}
+                                            </span>
                                           </div>
 
-                                          <button
-                                            onClick={() => {
-                                              setSearchQuery(med.name);
-                                              handleSelectMedicineForComparison(med);
-                                            }}
-                                            className="w-full bg-gradient-to-r from-teal-500 to-teal-600 text-slate-950 font-black text-xs py-2.5 rounded-xl transition hover:opacity-95 shadow-md flex items-center justify-center gap-1.5"
-                                          >
-                                            Compare Pharmacy Prices
-                                          </button>
+                                          {/* Body Info */}
+                                          <div className="p-5 flex-1 flex flex-col justify-between gap-4">
+                                            <div>
+                                              <h4 className="text-sm font-bold text-slate-100 group-hover:text-teal-400 transition">
+                                                {med.name}
+                                              </h4>
+                                              <p className="text-xs text-slate-400 font-semibold font-mono mt-0.5">
+                                                {med.brandName} • <span className="text-slate-500 font-normal">{med.genericName}</span>
+                                              </p>
+                                              <p className="text-xs text-slate-400 mt-2.5 leading-relaxed">
+                                                {desc}
+                                              </p>
+                                            </div>
+
+                                            <button
+                                              onClick={() => {
+                                                setSearchQuery(med.name);
+                                                handleSelectMedicineForComparison(med);
+                                              }}
+                                              className="w-full bg-gradient-to-r from-teal-500 to-teal-600 text-slate-950 font-black text-xs py-2.5 rounded-xl transition hover:opacity-95 shadow-md flex items-center justify-center gap-1.5"
+                                            >
+                                              Compare Pharmacy Prices
+                                            </button>
+                                          </div>
                                         </div>
-                                      </div>
-                                    );
-                                  })}
-                              </div>
-                            ) : (
-                              <div className="text-center py-12 border border-slate-800 border-dashed rounded-2xl bg-slate-950/40 text-slate-500 leading-relaxed">
-                                <Search className="w-8 h-8 text-slate-600 mx-auto mb-3" />
-                                <span className="text-sm font-bold text-slate-400 block mb-1">No Matching Medicines Found</span>
-                                <span className="text-xs">No clinical medicines matching "{searchQuery}" were found in our verified catalog.</span>
-                              </div>
-                            )}
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              } else {
+                                return (
+                                  <div className="text-center py-12 border border-slate-800 border-dashed rounded-2xl bg-slate-950/40 text-slate-500 leading-relaxed">
+                                    <Search className="w-8 h-8 text-slate-600 mx-auto mb-3" />
+                                    <span className="text-sm font-bold text-slate-400 block mb-1">No Matching Medicines Found</span>
+                                    <span className="text-xs">No clinical medicines matching "{searchQuery}" were found in our verified catalog.</span>
+                                  </div>
+                                );
+                              }
+                            })()}
                           </div>
                         ) : (
                           /* Mode B: Live Store comparisons listed in a clinical table, then optimal savings best price */
@@ -1721,16 +1862,149 @@ export default function App() {
                               </div>
                             </div>
 
+                            {/* Hidden File Inputs */}
+                            <input 
+                              type="file" 
+                              ref={cameraInputRef} 
+                              accept="image/*" 
+                              capture="environment" 
+                              onChange={handleReceiptFileChange} 
+                              className="hidden" 
+                            />
+                            <input 
+                              type="file" 
+                              ref={galleryInputRef} 
+                              accept="image/*" 
+                              onChange={handleReceiptFileChange} 
+                              className="hidden" 
+                            />
+
+                            {/* Receipt Image Upload Options */}
+                            <div className="flex flex-col gap-2 p-4 bg-slate-900/60 rounded-xl border border-slate-800/80">
+                              <label className="text-xs text-slate-400 font-bold flex items-center gap-1.5">
+                                <span>Receipt Bill Image</span>
+                                <span className="text-red-450 text-[10px] uppercase font-mono tracking-wide">(Pic is Mandatory)</span>
+                              </label>
+                              
+                              <div className="flex flex-col sm:flex-row gap-3">
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!complaintPharmacyId) {
+                                      triggerNotification('Please select the store involved first.', 'warning');
+                                      return;
+                                    }
+                                    startCamera();
+                                  }}
+                                  className="flex-1 flex items-center justify-center gap-2 bg-slate-900 border border-slate-700 hover:border-slate-500 hover:bg-slate-850 text-slate-200 text-xs font-bold py-3 px-4 rounded-xl transition"
+                                >
+                                  <Camera className="w-4 h-4 text-emerald-400" />
+                                  Capture Receipt (Camera)
+                                </button>
+                                
+                                <button
+                                  type="button"
+                                  onClick={() => {
+                                    if (!complaintPharmacyId) {
+                                      triggerNotification('Please select the store involved first.', 'warning');
+                                      return;
+                                    }
+                                    galleryInputRef.current.click();
+                                  }}
+                                  className="flex-1 flex items-center justify-center gap-2 bg-slate-900 border border-slate-700 hover:border-slate-500 hover:bg-slate-850 text-slate-200 text-xs font-bold py-3 px-4 rounded-xl transition"
+                                >
+                                  <Upload className="w-4 h-4 text-sky-400" />
+                                  Upload Receipt (Gallery)
+                                </button>
+                              </div>
+
+                              {/* Uploaded Receipt Preview */}
+                              {disputeImage && (
+                                <div className="mt-3 flex flex-col bg-slate-950 rounded-xl border border-slate-850 overflow-hidden transition-all duration-300 shadow-sm animate-fade-in">
+                                  {/* Uploaded Row Container (Clicking toggles visibility) */}
+                                  <div 
+                                    onClick={() => setShowDisputeImagePreview(!showDisputeImagePreview)}
+                                    className="flex justify-between items-center p-3 cursor-pointer hover:bg-slate-900 transition-colors select-none"
+                                  >
+                                    <div className="flex items-center gap-2.5 min-w-0">
+                                      <div className="p-2 rounded-lg bg-teal-500/10 text-teal-500">
+                                        <FileText className="w-4 h-4" />
+                                      </div>
+                                      <div className="flex flex-col min-w-0">
+                                        <span className="text-xs font-semibold text-slate-100 truncate">
+                                          {disputeImageName || 'captured_invoice.jpg'}
+                                        </span>
+                                        <span className="text-[10px] text-slate-400 font-medium">
+                                          {showDisputeImagePreview ? 'Click to hide preview' : 'Click to preview receipt'}
+                                        </span>
+                                      </div>
+                                    </div>
+                                    
+                                    <div className="flex items-center gap-2 shrink-0">
+                                      <button
+                                        type="button"
+                                        className="text-teal-500 hover:text-teal-600 font-bold text-[10px] uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-teal-500/5 hover:bg-teal-500/10 transition"
+                                      >
+                                        {showDisputeImagePreview ? 'Hide' : 'View'}
+                                      </button>
+                                      <button
+                                        type="button"
+                                        onClick={(e) => {
+                                          e.stopPropagation();
+                                          handleRemoveReceiptImage();
+                                        }}
+                                        className="text-rose-500 hover:text-rose-600 font-bold text-[10px] uppercase tracking-wider px-2.5 py-1.5 rounded-lg bg-rose-500/5 hover:bg-rose-500/10 transition border border-rose-500/10"
+                                      >
+                                        Remove
+                                      </button>
+                                    </div>
+                                  </div>
+
+                                  {/* Conditionally rendered preview drawer */}
+                                  {showDisputeImagePreview && (
+                                    <div className="border-t border-slate-850 bg-slate-900/30 p-3.5 flex flex-col items-center justify-center animate-fade-in">
+                                      <div className="relative group max-w-full rounded-lg overflow-hidden border border-slate-850 bg-slate-950 flex items-center justify-center">
+                                        <img 
+                                          src={disputeImage} 
+                                          alt="Receipt Preview" 
+                                          className="max-h-48 w-auto object-contain opacity-95 group-hover:opacity-100 transition duration-200 cursor-zoom-in"
+                                          onClick={() => {
+                                            const w = window.open();
+                                            w.document.write(`<img src="${disputeImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto; background:#f0f4fa;" />`);
+                                          }}
+                                        />
+                                        <div className="absolute inset-0 bg-slate-900/40 opacity-0 group-hover:opacity-100 transition-opacity duration-200 flex items-center justify-center pointer-events-none">
+                                          <span className="bg-slate-950/90 text-[10px] text-slate-100 px-2.5 py-1 rounded-md border border-slate-850 font-bold">
+                                            Click to open in new tab
+                                          </span>
+                                        </div>
+                                      </div>
+                                    </div>
+                                  )}
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Animated OCR Parsing Loader */}
+                            {isOcrParsing && (
+                              <div className="flex items-center gap-3 p-4 bg-teal-500/5 rounded-xl border border-teal-500/20 text-teal-400 font-mono text-xs animate-pulse">
+                                <RefreshCw className="w-4 h-4 animate-spin text-teal-400" />
+                                <span>⚙️ MedSafe OCR Engine: Parsing receipt invoice metrics...</span>
+                              </div>
+                            )}
+
+                            {/* Editable Invoice Text Output (from OCR) */}
                             {complaintType === 'Price Mismatch' && (
                               <div className="flex flex-col gap-2 p-4 bg-slate-900 rounded-xl border border-slate-800">
-                                <span className="text-xs font-mono text-amber-400 flex items-center gap-1.5">
-                                  <Barcode className="w-4 h-4" /> Invoice Bill Simulator
+                                <span className="text-xs font-mono text-amber-455 flex items-center gap-1.5">
+                                  <Barcode className="w-4 h-4" /> Invoice Bill Metrics (Editable)
                                 </span>
-                                <p className="text-[10px] text-slate-500">Edit this simulated invoice text to test the anti-fraud analyzer. If invoice price exceeds the listed price ($15), it flags mismatch fraud.</p>
+                                <p className="text-[10px] text-slate-500">The details below are parsed by the OCR engine. You have a choice to correct or edit this output.</p>
                                 <textarea
                                   value={mockInvoiceText}
                                   onChange={(e) => setMockInvoiceText(e.target.value)}
-                                  rows="4"
+                                  rows="6"
+                                  placeholder={`Bill No: 9941\nMedicine: Paracetamol\nPrice: 45\nQty: 1`}
                                   className="w-full bg-slate-950 border border-slate-800 rounded-lg p-2.5 text-xs text-teal-400 font-mono focus:outline-none"
                                 />
                               </div>
@@ -1939,40 +2213,55 @@ export default function App() {
                                 </thead>
                                 <tbody>
                                   {myComplaints.map(comp => (
-                                    <tr key={comp._id} onClick={() => setSelectedDisputeDetail(comp)} className="border-b border-slate-900 last:border-0 hover:bg-slate-900/30 cursor-pointer transition">
-                                      <td className="py-3.5 px-4 font-bold text-slate-200">{comp.pharmacyName}</td>
+                                    <tr 
+                                      key={comp._id} 
+                                      onClick={() => setSelectedDisputeDetail(comp)} 
+                                      className={`border-b last:border-0 cursor-pointer transition ${
+                                        comp.penaltyApplied 
+                                          ? 'border-emerald-200 bg-emerald-50/50 hover:bg-emerald-50/90' 
+                                          : 'border-slate-850 hover:bg-slate-900/30'
+                                      }`}
+                                    >
+                                      <td className={`py-3.5 px-4 font-bold ${comp.penaltyApplied ? 'text-emerald-900' : 'text-slate-100'}`}>{comp.pharmacyName}</td>
                                       <td className="py-3.5 px-4">
-                                        <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase ${
-                                          comp.type === 'Price Mismatch' ? 'bg-red-500/10 text-red-400 border border-red-500/20' : 'bg-slate-900 text-slate-400'
+                                        <span className={`px-2 py-0.5 rounded text-[8px] font-mono font-bold uppercase border ${
+                                          comp.type === 'Price Mismatch' ? 'bg-red-50 text-red-750 border-red-200' : 'bg-slate-900 text-slate-500 border-slate-800'
                                         }`}>
                                           {comp.type}
                                         </span>
                                       </td>
-                                      <td className="py-3.5 px-4 max-w-[200px] truncate text-slate-400 font-mono text-[11px]" title={comp.description}>
+                                      <td className={`py-3.5 px-4 max-w-[200px] truncate font-mono text-[11px] ${comp.penaltyApplied ? 'text-emerald-800' : 'text-slate-500'}`} title={comp.description}>
                                         {comp.description}
                                       </td>
                                       <td className="py-3.5 px-4 text-center">
-                                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold ${
-                                          comp.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400' :
-                                          comp.status === 'Dismissed' ? 'bg-slate-800 text-slate-400' :
-                                          comp.responseFromPharmacy ? 'bg-blue-500/10 text-blue-400' :
-                                          'bg-amber-500/10 text-amber-400 animate-pulse'
+                                        <span className={`px-2 py-0.5 rounded text-[9px] font-bold border ${
+                                          comp.status === 'Resolved' ? 'bg-emerald-50 text-emerald-800 border-emerald-200' :
+                                          comp.status === 'Dismissed' ? 'bg-slate-900 text-slate-500 border-slate-850' :
+                                          comp.responseFromPharmacy ? 'bg-blue-50 text-blue-800 border border-blue-200' :
+                                          'bg-amber-50 text-amber-800 animate-pulse border border-amber-200'
                                         }`}>
                                           {comp.status === 'Pending'
                                             ? (comp.responseFromPharmacy ? 'Under Admin Review' : 'Awaiting Store Response')
                                             : comp.status}
                                         </span>
                                       </td>
-                                      <td className="py-3.5 px-4 text-right font-mono text-[10px] text-slate-500">
-                                        {comp.responseFromPharmacy ? (
+                                      <td className="py-3.5 px-4 text-right font-mono text-[10px]">
+                                        {comp.penaltyApplied ? (
+                                          <div className="flex flex-col items-end gap-1">
+                                            <span className="text-[9px] text-emerald-800 font-bold bg-emerald-50 border border-emerald-200 px-2 py-0.5 rounded flex items-center gap-1 w-max">
+                                              <Check className="w-3 h-3 text-emerald-700" /> Penalty Applied
+                                            </span>
+                                            <span className="text-[8px] text-emerald-800 font-sans italic">Thank you for reporting!</span>
+                                          </div>
+                                        ) : comp.responseFromPharmacy ? (
                                           <div className="flex flex-col gap-0.5 max-w-[150px] ml-auto text-left">
-                                            <span className="text-[8px] text-teal-400 font-bold uppercase">Pharmacy Response:</span>
-                                            <span className="text-[10px] text-slate-300 italic truncate" title={comp.responseFromPharmacy}>
+                                            <span className="text-[8px] text-slate-500 font-bold uppercase">Pharmacy Response:</span>
+                                            <span className="text-[10px] text-slate-100 italic truncate" title={comp.responseFromPharmacy}>
                                               "{comp.responseFromPharmacy}"
                                             </span>
                                           </div>
                                         ) : (
-                                          <span className="italic">Awaiting review</span>
+                                          <span className="italic text-slate-500">Awaiting review</span>
                                         )}
                                       </td>
                                     </tr>
@@ -2582,7 +2871,24 @@ export default function App() {
                         return targetList.length > 0 ? (
                           <div className="flex flex-col gap-4">
                             {targetList.map(comp => (
-                              <div key={comp._id} className="p-5 bg-slate-900 rounded-xl border border-slate-800 flex flex-col gap-4">
+                              <div 
+                                key={comp._id} 
+                                className={`p-5 bg-slate-900 rounded-xl border flex flex-col gap-4 transition duration-300 ${
+                                  comp.penaltyApplied 
+                                    ? 'border-red-500/35 bg-gradient-to-b from-slate-900 to-red-950/5 shadow-lg shadow-red-950/15' 
+                                    : 'border-slate-800'
+                                }`}
+                              >
+                                {comp.penaltyApplied && (
+                                  <div className="flex items-center gap-3 p-3.5 bg-red-500/5 rounded-xl border border-red-500/20 text-red-400 text-xs">
+                                    <AlertTriangle className="w-5 h-5 text-red-400 flex-shrink-0" />
+                                    <div className="flex flex-col gap-0.5">
+                                      <span className="font-bold">🚨 Penalty Applied to Store Ledger</span>
+                                      <span className="text-[10px] text-red-400/80">Admin resolved this pricing dispute in favor of the customer. A trust score penalty of 20 points has been applied.</span>
+                                    </div>
+                                  </div>
+                                )}
+
                                 <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 border-b border-slate-950 pb-3 text-xs">
                                   <div>
                                     <span className="text-[9px] text-slate-550 font-mono block">DISPUTE ID: {comp._id}</span>
@@ -2614,6 +2920,43 @@ export default function App() {
                                     "{comp.description}"
                                   </p>
                                 </div>
+
+                                {/* Display Submitted Evidence to the Pharmacy Owner */}
+                                {(comp.disputeImage || comp.billImage) && (
+                                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-950 pt-3">
+                                    {comp.billImage && (
+                                      <div className="flex flex-col gap-1.5">
+                                        <span className="text-[9px] text-slate-550 font-mono uppercase flex items-center gap-1">
+                                          <Barcode className="w-3.5 h-3.5 text-amber-500" /> Parsed Invoice Metrics:
+                                        </span>
+                                        <pre className="text-[9px] text-slate-400 bg-slate-950 p-2.5 rounded border border-slate-850 overflow-x-auto whitespace-pre font-mono h-24">
+                                          {comp.billImage}
+                                        </pre>
+                                      </div>
+                                    )}
+                                    {comp.disputeImage && (
+                                      <div className="flex flex-col gap-1.5">
+                                        <span className="text-[9px] text-slate-550 font-mono uppercase flex items-center gap-1">
+                                          <FileText className="w-3.5 h-3.5 text-teal-400" /> Receipt Image Evidence:
+                                        </span>
+                                        <div className="w-full h-24 rounded bg-slate-950 overflow-hidden border border-slate-850 flex items-center justify-center relative group">
+                                          <img 
+                                            src={comp.disputeImage} 
+                                            alt="Customer Dispute Receipt Scan" 
+                                            className="h-full w-auto object-contain cursor-zoom-in transition duration-300 group-hover:scale-105"
+                                            onClick={() => {
+                                              const w = window.open();
+                                              w.document.write(`<img src="${comp.disputeImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+                                            }}
+                                          />
+                                          <div className="absolute inset-0 bg-slate-950/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center pointer-events-none">
+                                            <span className="text-[9px] text-teal-300 font-bold uppercase tracking-wider">Click to Zoom</span>
+                                          </div>
+                                        </div>
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
 
                                 {comp.responseFromPharmacy ? (
                                   <div className="flex flex-col gap-2 bg-teal-950/10 border border-teal-500/15 p-4 rounded-lg">
@@ -2810,281 +3153,196 @@ export default function App() {
                     }
 
                     return executiveAssignments.length > 0 ? (
-                      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-                        
-                        {/* Left column: List of assignments based on active tab */}
-                        <div className="lg:col-span-1 flex flex-col gap-4 border-r border-slate-800 pr-4">
-                          <div className="flex items-center justify-between">
-                            <span className="text-xs font-mono uppercase text-slate-400 tracking-wider flex items-center gap-1.5">
-                              {execTab === 'active' ? (
-                                <>
-                                  <span className="w-2 h-2 rounded-full bg-indigo-500 animate-pulse"></span>
-                                  Pending Audits ({activeAssignments.length})
-                                </>
-                              ) : (
-                                <>
-                                  <History className="w-3.5 h-3.5 text-emerald-400" />
-                                  Completed Audits ({pastAssignments.length})
-                                </>
-                              )}
-                            </span>
-                          </div>
-
-                          {currentList.length > 0 ? (
-                            <div className="flex flex-col gap-3 max-h-[600px] overflow-y-auto pr-1">
-                              {currentList.map(store => (
-                                <div
-                                  key={store._id}
-                                  onClick={() => {
-                                    setActiveAssignment(store);
-                                    if (execTab === 'active') {
-                                      setChecklist({
-                                        licenceVerified: false,
-                                        gstVerified: false,
-                                        qualityChecked: false,
-                                        noExpiredStock: false,
-                                        barcodeConfigured: false,
-                                        billingSynced: false,
-                                        staffTrained: false
-                                      });
-                                    }
-                                  }}
-                                  className={`flex-shrink-0 p-5 rounded-2xl border transition-all duration-300 cursor-pointer flex flex-col gap-3.5 relative overflow-hidden ${
-                                    activeAssignment?._id === store._id 
-                                      ? execTab === 'active' 
-                                        ? 'border-indigo-500 bg-indigo-950/20 shadow-md shadow-indigo-500/5' 
-                                        : 'border-emerald-500 bg-emerald-950/20 shadow-md shadow-emerald-500/5'
-                                      : 'border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900/45'
-                                  }`}
-                                >
-                                  {/* Decorative side bar indicator */}
-                                  <div className={`absolute left-0 top-0 bottom-0 w-1 transition-all duration-300 ${
-                                    activeAssignment?._id === store._id
-                                      ? execTab === 'active' ? 'bg-indigo-500' : 'bg-emerald-500'
-                                      : 'bg-transparent'
-                                  }`} />
-
-                                  <div className="flex justify-between items-start gap-2">
-                                    <div className="flex flex-col gap-1">
-                                      <h4 className="font-bold text-slate-100 text-xs sm:text-[13px] tracking-wide">{store.name}</h4>
-                                      <p className="text-[10px] text-slate-400 font-medium flex items-center gap-1.5 mt-0.5">
-                                        <MapPin className="w-3.5 h-3.5 text-slate-555 flex-shrink-0" />
-                                        <span className="truncate max-w-[180px]">{store.address}</span>
-                                      </p>
-                                    </div>
-                                  </div>
-
-                                  <div className="pt-2.5 border-t border-slate-900 flex items-center justify-between text-[10px] font-mono text-slate-400">
-                                    <div className="flex items-center gap-1.5">
-                                      <span className="w-4 h-4 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 font-sans text-[8px] font-bold">
-                                        {store.ownerName?.charAt(0).toUpperCase() || 'O'}
-                                      </span>
-                                      <span>{store.ownerName}</span>
-                                    </div>
-                                    
-                                    {execTab === 'active' ? (
-                                      store.status === 'Under Admin Review' ? (
-                                        <span className="px-2.5 py-1 rounded-lg border font-bold font-mono tracking-wide uppercase text-[8px] bg-amber-50 border-amber-200/60 text-amber-700">
-                                          Awaiting Review
-                                        </span>
-                                      ) : (
-                                        <span className="px-2.5 py-1 rounded-lg border font-bold font-mono tracking-wide uppercase text-[8px] bg-indigo-50 border-indigo-200/60 text-indigo-700">
-                                          Pending Audit
-                                        </span>
-                                      )
-                                    ) : (
-                                      <span className={`px-2.5 py-1 rounded-lg border font-bold font-mono tracking-wide uppercase text-[8px] ${
-                                        store.status === 'Approved & Verified' 
-                                          ? 'bg-emerald-50 border-emerald-200/60 text-emerald-700' 
-                                          : store.status === 'Rejected'
-                                            ? 'bg-red-50 border-red-200/60 text-red-700'
-                                            : 'bg-amber-50 border-amber-200/60 text-amber-700'
-                                      }`}>
-                                        {store.status === 'Approved & Verified' ? 'Approved' : store.status === 'Rejected' ? 'Rejected' : store.status}
-                                      </span>
-                                    )}
-                                  </div>
+                      <>
+                        <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 w-full animate-fade-in">
+                          {currentList.map(store => (
+                            <div
+                              key={store._id}
+                              onClick={() => {
+                                setActiveAssignment(store);
+                                if (execTab === 'active') {
+                                  setChecklist({
+                                    licenceVerified: false,
+                                    gstVerified: false,
+                                    qualityChecked: false,
+                                    noExpiredStock: false,
+                                    barcodeConfigured: false,
+                                    billingSynced: false,
+                                    staffTrained: false
+                                  });
+                                }
+                              }}
+                              className="group relative p-5 rounded-2xl border border-slate-800 bg-slate-950 hover:border-slate-700 hover:bg-slate-900/40 cursor-pointer flex flex-col justify-between gap-4 transition-all duration-300 shadow-lg shadow-black/10 overflow-hidden"
+                            >
+                              <div className="flex flex-col gap-2">
+                                <div className="flex justify-between items-start gap-2">
+                                  <span className="text-[9px] font-mono text-indigo-400 uppercase tracking-widest font-bold">Field Assignment</span>
+                                  {execTab === 'active' ? (
+                                    <span className="w-1.5 h-1.5 rounded-full bg-indigo-500 animate-pulse mt-1"></span>
+                                  ) : (
+                                    <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+                                  )}
                                 </div>
-                              ))}
+                                <h4 className="font-extrabold text-slate-100 text-xs sm:text-[13px] tracking-wide group-hover:text-indigo-400 transition">{store.name}</h4>
+                                <p className="text-[10px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                                  <MapPin className="w-3.5 h-3.5 text-slate-600 flex-shrink-0" />
+                                  <span className="truncate">{store.address}</span>
+                                </p>
+                              </div>
+
+                              <div className="pt-3 border-t border-slate-900 flex items-center justify-between text-[10px] font-mono text-slate-400">
+                                <div className="flex items-center gap-1.5">
+                                  <div className="w-4 h-4 rounded-full bg-slate-900 border border-slate-800 flex items-center justify-center text-slate-500 font-sans text-[8px] font-bold">
+                                    {store.ownerName?.charAt(0).toUpperCase() || 'O'}
+                                  </div>
+                                  <span>{store.ownerName}</span>
+                                </div>
+                                
+                                {execTab === 'active' ? (
+                                  store.status === 'Under Admin Review' ? (
+                                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-amber-500/10 border border-amber-500/20 text-amber-400">
+                                      Awaiting Review
+                                    </span>
+                                  ) : (
+                                    <span className="px-2 py-0.5 rounded text-[9px] font-bold bg-indigo-500/10 border border-indigo-500/20 text-indigo-400">
+                                      Audit Pending
+                                    </span>
+                                  )
+                                ) : (
+                                  <span className={`px-2 py-0.5 rounded text-[9px] font-bold border uppercase tracking-wider ${
+                                    store.status === 'Approved & Verified' 
+                                      ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' 
+                                      : store.status === 'Rejected'
+                                        ? 'bg-rose-500/10 border-rose-500/20 text-rose-400'
+                                        : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                  }`}>
+                                    {store.status === 'Approved & Verified' ? 'Approved' : store.status === 'Rejected' ? 'Rejected' : store.status}
+                                  </span>
+                                )}
+                              </div>
                             </div>
-                          ) : (
-                            <div className="p-8 text-center border border-dashed border-slate-850 rounded-xl text-slate-500 text-[11px] font-mono">
-                              {execTab === 'active' ? 'No pending field assignments.' : 'No audit records in logs.'}
+                          ))}
+                          {currentList.length === 0 && (
+                            <div className="col-span-full py-16 text-center border border-dashed border-slate-850 bg-slate-950/20 rounded-2xl text-slate-500 text-xs font-mono">
+                              {execTab === 'active' ? '🎉 All dispatch field assignments verified! Zero tasks pending.' : 'No past audit reports found in archive.'}
                             </div>
                           )}
                         </div>
 
-                        {/* Right column: Audit Form or Submitted Report Viewer */}
-                        <div className="lg:col-span-2 flex flex-col gap-6">
-                          {activeAssignment ? (
-                            <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-6">
-                              
+                        {/* Modal Dialog Popup */}
+                        {activeAssignment && (
+                          <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 animate-fade-in">
+                            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 md:p-8 max-w-2xl w-full shadow-2xl flex flex-col gap-6 relative max-h-[90vh] overflow-y-auto">
+                              <button 
+                                onClick={() => setActiveAssignment(null)}
+                                className="absolute top-4 right-4 text-slate-400 hover:text-slate-200 text-sm font-bold bg-slate-800/80 p-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-800 transition"
+                              >
+                                ✕ Close
+                              </button>
+
                               {execTab === 'past' || ['Under Admin Review', 'Approved & Verified', 'Rejected', 'Needs Corrections'].includes(activeAssignment.status) ? (
-                                <div className="flex flex-col gap-5 p-5 bg-slate-900 border border-slate-800 rounded-2xl animate-fade-in text-xs font-mono">
+                                // Past Audit Detail Viewer
+                                <div className="flex flex-col gap-5 text-xs font-mono mt-2">
                                   <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-3 border-b border-slate-800">
-                                    <div className="flex items-center justify-between flex-wrap gap-2 w-full">
-                                      <div>
-                                        <span className="text-[9px] text-slate-500 font-sans block">ONBOARDING REPORT IDENTIFIER</span>
-                                        <h4 className="text-sm font-bold text-slate-100 font-sans mt-0.5">Audit Questionnaire Submitted</h4>
-                                      </div>
-                                      {(matchedReport || ['Under Admin Review', 'Approved & Verified', 'Rejected', 'Needs Corrections'].includes(activeAssignment.status)) && (
-                                        <button
-                                          onClick={() => downloadRoleReport('executive_audit', {
-                                            title: 'On-Site Field Audit Compliance Report',
-                                            subtitle: `Audited Pharmacy Store: ${activeAssignment.name}`,
-                                            store: activeAssignment,
-                                            report: matchedReport || {
-                                              executiveName: activeAssignment.assignedExecutiveName || 'Inspector Vikram',
-                                              executiveId: activeAssignment.assignedExecutiveId || 'mock_exec',
-                                              recommendation: activeAssignment.status === 'Approved & Verified' ? 'Approved' : 'Needs Corrections',
-                                              certificationStatus: 'Pass',
-                                              medicineQualityStatus: 'Pass',
-                                              inventorySetupStatus: 'Completed',
-                                              complianceNotes: activeAssignment.adminComments || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'
-                                            }
-                                          })}
-                                          className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1 px-2.5 rounded-lg text-[9px] font-mono transition flex items-center gap-1 shadow-sm mt-1 sm:mt-0 animate-fade-in"
-                                        >
-                                          <FileText className="w-3 h-3" /> Download Audit PDF
-                                        </button>
-                                      )}
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 font-sans block">ONBOARDING REPORT IDENTIFIER</span>
+                                      <h4 className="text-sm font-bold text-slate-100 font-sans mt-0.5">Audit compliance checklist details</h4>
                                     </div>
-                                    <div className={`px-2.5 py-1 rounded text-[10px] font-bold border uppercase tracking-wider self-start sm:self-auto ${
-                                      activeAssignment.status === 'Approved & Verified' 
-                                        ? 'bg-emerald-50 border-emerald-200/60 text-emerald-700' 
-                                        : activeAssignment.status === 'Rejected'
-                                          ? 'bg-red-50 border-red-200/60 text-red-700'
-                                          : 'bg-amber-50 border-amber-200/60 text-amber-700'
-                                    }`}>
-                                      Status: {activeAssignment.status === 'Under Admin Review' ? 'Under Review' : activeAssignment.status}
+                                    {(matchedReport || ['Under Admin Review', 'Approved & Verified', 'Rejected', 'Needs Corrections'].includes(activeAssignment.status)) && (
+                                      <button
+                                        onClick={() => downloadRoleReport('executive_audit', {
+                                          title: 'On-Site Field Audit Compliance Report',
+                                          subtitle: `Audited Pharmacy Store: ${activeAssignment.name}`,
+                                          store: activeAssignment,
+                                          report: matchedReport || {
+                                            executiveName: activeAssignment.assignedExecutiveName || 'Inspector Vikram',
+                                            executiveId: activeAssignment.assignedExecutiveId || 'mock_exec',
+                                            recommendation: activeAssignment.status === 'Approved & Verified' ? 'Approved' : 'Needs Corrections',
+                                            certificationStatus: 'Pass',
+                                            medicineQualityStatus: 'Pass',
+                                            inventorySetupStatus: 'Completed',
+                                            complianceNotes: activeAssignment.adminComments || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'
+                                          }
+                                        })}
+                                        className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-2.5 px-4 rounded-xl text-xs font-mono transition flex items-center gap-1.5 shadow-md shadow-teal-500/10 mt-2 sm:mt-0"
+                                      >
+                                        <FileText className="w-4 h-4" /> Download Audit PDF
+                                      </button>
+                                    )}
+                                  </div>
+
+                                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block uppercase font-mono">Inspected By</span>
+                                      <span className="font-bold text-slate-200 mt-0.5">{matchedReport?.executiveName || activeAssignment.assignedExecutiveName || 'Inspector Vikram'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block uppercase font-mono">Inspection Date</span>
+                                      <span className="font-bold text-slate-200 mt-0.5">{matchedReport ? new Date(matchedReport.createdAt).toLocaleString() : 'N/A'}</span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block uppercase font-mono">Inspector Recommendation</span>
+                                      <span className={`font-bold mt-0.5 ${matchedReport?.recommendation === 'Approved' || activeAssignment.status === 'Approved & Verified' ? 'text-emerald-400' : 'text-rose-400'}`}>
+                                        {matchedReport?.recommendation || (activeAssignment.status === 'Approved & Verified' ? 'Approved' : 'Needs Corrections')}
+                                      </span>
+                                    </div>
+                                    <div>
+                                      <span className="text-[9px] text-slate-500 block uppercase font-mono">Audit Decision</span>
+                                      <span className="font-bold text-slate-200 mt-0.5 uppercase">{activeAssignment.status === 'Approved & Verified' ? 'Approved' : activeAssignment.status}</span>
                                     </div>
                                   </div>
 
-                                  {matchedReport ? (
-                                    <div className="flex flex-col gap-4">
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Inspected By</span>
-                                          <span className="font-bold text-slate-200 font-sans mt-0.5">{matchedReport.executiveName} (ID: {matchedReport.executiveId})</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Inspection Timestamp</span>
-                                          <span className="font-bold text-slate-200 mt-0.5">{new Date(matchedReport.createdAt).toLocaleString()}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Inspector Recommendation</span>
-                                          <span className={`font-bold mt-0.5 ${matchedReport.recommendation === 'Approved' ? 'text-emerald-600' : 'text-rose-600'}`}>
-                                            {matchedReport.recommendation}
-                                          </span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Cold Chain Verification</span>
-                                          <span className="font-bold text-slate-200 mt-0.5">{matchedReport.medicineQualityStatus === 'Pass' ? 'PASS (Shelving Verified)' : 'FAIL'}</span>
-                                        </div>
+                                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-850">
+                                    <span className="text-[9px] text-slate-500 block uppercase mb-1.5">Checklist Evaluation Details</span>
+                                    <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[9px] font-sans">
+                                      <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-350">
+                                        {matchedReport?.certificationStatus === 'Pass' || activeAssignment.status === 'Approved & Verified' ? (
+                                          <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                                        ) : (
+                                          <XCircle className="w-3.5 h-3.5 text-rose-455 flex-shrink-0" />
+                                        )}
+                                        <span>DL & GST Verified</span>
                                       </div>
-
-                                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850">
-                                        <span className="text-[9px] text-slate-500 block uppercase mb-1.5">Inspector Checklist Evaluation</span>
-                                        <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 text-[9px] font-sans">
-                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
-                                            {matchedReport.certificationStatus === 'Pass' ? (
-                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-                                            ) : (
-                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
-                                            )}
-                                            <span>DL & GST Verified</span>
-                                          </div>
-                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
-                                            {matchedReport.medicineQualityStatus === 'Pass' ? (
-                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-                                            ) : (
-                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
-                                            )}
-                                            <span>Cold Chain & Quality Checks</span>
-                                          </div>
-                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
-                                            {matchedReport.inventorySetupStatus === 'Completed' ? (
-                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-                                            ) : (
-                                              <AlertCircle className="w-3.5 h-3.5 text-amber-500 flex-shrink-0" />
-                                            )}
-                                            <span>Barcode & Billing Setup</span>
-                                          </div>
-                                        </div>
+                                      <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-350">
+                                        {matchedReport?.medicineQualityStatus === 'Pass' || activeAssignment.status === 'Approved & Verified' ? (
+                                          <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                                        ) : (
+                                          <XCircle className="w-3.5 h-3.5 text-rose-455 flex-shrink-0" />
+                                        )}
+                                        <span>Cold Chain Checked</span>
                                       </div>
-
-                                      {matchedReport.complianceNotes && (
-                                        <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
-                                          <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Notes & Compliance Assessments</span>
-                                          <p className="text-slate-300 italic text-[11px] leading-relaxed">"{matchedReport.complianceNotes}"</p>
-                                        </div>
-                                      )}
-                                    </div>
-                                  ) : (
-                                    <div className="flex flex-col gap-4">
-                                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Inspected By</span>
-                                          <span className="font-bold text-slate-200 font-sans mt-0.5">{activeAssignment.assignedExecutiveName || 'System Auditor'}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Scheduled Visit Date</span>
-                                          <span className="font-bold text-slate-200 mt-0.5">{activeAssignment.visitScheduleDate || activeAssignment.preferredVisitDate || 'N/A'}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Drug License No</span>
-                                          <span className="font-bold text-slate-200 font-mono mt-0.5">{activeAssignment.drugLicense}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">GST Number</span>
-                                          <span className="font-bold text-slate-200 font-mono mt-0.5">{activeAssignment.gstNumber}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Store Timings</span>
-                                          <span className="font-bold text-slate-200 font-sans mt-0.5">{activeAssignment.storeTimings || 'N/A'}</span>
-                                        </div>
-                                        <div>
-                                          <span className="text-[9px] text-slate-500 block uppercase">Billing Integrator</span>
-                                          <span className="font-bold text-teal-400 font-sans mt-0.5">{activeAssignment.billingSoftware || 'MedSafe-Link Basic'}</span>
-                                        </div>
-                                      </div>
-
-                                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850">
-                                        <span className="text-[9px] text-slate-500 block uppercase mb-1.5">Compliance Documents Checklist</span>
-                                        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[9px] font-sans">
-                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
-                                            {activeAssignment.certifications?.includes('DRUG_LICENSE_UPLOADED') || activeAssignment.status === 'Approved & Verified' ? (
-                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-                                            ) : (
-                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
-                                            )}
-                                            <span>Drug License Verified</span>
-                                          </div>
-                                          <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-300">
-                                            {activeAssignment.certifications?.includes('GST_CERTIFICATE_UPLOADED') || activeAssignment.status === 'Approved & Verified' ? (
-                                              <Check className="w-3.5 h-3.5 text-emerald-500 flex-shrink-0" />
-                                            ) : (
-                                              <XCircle className="w-3.5 h-3.5 text-rose-500 flex-shrink-0" />
-                                            )}
-                                            <span>GST Registry Verified</span>
-                                          </div>
-                                        </div>
-                                      </div>
-
-                                      <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
-                                        <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Store Contact Particulars</span>
-                                        <p className="text-slate-300 text-[11px] leading-relaxed">
-                                          Address: <strong className="text-slate-200">{activeAssignment.address}</strong><br/>
-                                          Phone: <strong className="text-slate-200">{activeAssignment.contact}</strong>
-                                        </p>
+                                      <div className="flex items-center gap-1.5 p-2 bg-slate-900 border border-slate-800 rounded text-slate-350">
+                                        {matchedReport?.inventorySetupStatus === 'Completed' || activeAssignment.status === 'Approved & Verified' ? (
+                                          <Check className="w-3.5 h-3.5 text-emerald-400 flex-shrink-0" />
+                                        ) : (
+                                          <AlertCircle className="w-3.5 h-3.5 text-amber-455 flex-shrink-0" />
+                                        )}
+                                        <span>Barcode Sync Checked</span>
                                       </div>
                                     </div>
-                                  )}
+                                  </div>
+
+                                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                                    <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Store Metadata Details</span>
+                                    <p className="text-slate-300 text-[11px] leading-relaxed">
+                                      Store License: <strong className="text-slate-200">{activeAssignment.drugLicense}</strong><br/>
+                                      Store GST: <strong className="text-slate-200">{activeAssignment.gstNumber}</strong><br/>
+                                      Store Phone: <strong className="text-slate-200">{activeAssignment.contact}</strong>
+                                    </p>
+                                  </div>
+
+                                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                                    <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Notes & Assessments</span>
+                                    <p className="text-slate-300 italic text-[11px] leading-relaxed">
+                                      "{matchedReport?.complianceNotes || activeAssignment.adminComments || 'All compliance checks are validated.'}"
+                                    </p>
+                                  </div>
                                 </div>
                               ) : (
-                                <form onSubmit={handleExecReportSubmit} className="flex flex-col gap-6 font-sans">
+                                // Active Audit Form Modal
+                                <form onSubmit={handleExecReportSubmit} className="flex flex-col gap-6 font-sans mt-2">
                                   <div>
-                                    <span className="text-[9px] font-mono text-slate-500 uppercase">PHYSICAL INSPECTION PROTOCOL</span>
+                                    <span className="text-[9px] font-mono text-indigo-400 uppercase tracking-widest">PHYSICAL INSPECTION PROTOCOL</span>
                                     <h3 className="text-sm font-bold text-slate-100 mt-1">Audit Questionnaire: {activeAssignment.name}</h3>
                                     <p className="text-xs text-slate-400">Complete legal, clinical, and technical parameters during store inspection.</p>
                                   </div>
@@ -3159,7 +3417,7 @@ export default function App() {
                                           onChange={(e) => setChecklist({ ...checklist, billingSynced: e.target.checked })}
                                           className="w-4 h-4 accent-indigo-500 rounded"
                                         />
-                                        <span>Billing Sync API integrator successfully linked</span>
+                                        <span>Billing Sync API integrator linked</span>
                                       </label>
                                     </div>
                                   </div>
@@ -3183,7 +3441,7 @@ export default function App() {
                                       <label className="text-xs text-slate-400 font-medium">Verification Executive Assessment Notes</label>
                                       <input 
                                         type="text" 
-                                        placeholder="Type notes on drug legitimacy, storage conditions..."
+                                        placeholder="Type notes on legitimacy, storage conditions..."
                                         value={executiveNotes}
                                         onChange={(e) => setExecutiveNotes(e.target.value)}
                                         className="bg-slate-900 border border-slate-700 p-3 text-xs rounded-xl focus:outline-none text-white"
@@ -3191,37 +3449,27 @@ export default function App() {
                                     </div>
                                   </div>
 
-                                  <button
-                                    type="submit"
-                                    className="bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-xs py-3 px-6 rounded-xl transition self-end font-sans"
-                                  >
-                                    Submit Audit Report to Admin Panel
-                                  </button>
+                                  <div className="flex justify-end gap-3 pt-2">
+                                    <button
+                                      type="button"
+                                      onClick={() => setActiveAssignment(null)}
+                                      className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold text-xs py-3 px-6 rounded-xl transition font-sans"
+                                    >
+                                      Cancel
+                                    </button>
+                                    <button
+                                      type="submit"
+                                      className="bg-indigo-650 hover:bg-indigo-600 text-white font-bold text-xs py-3 px-6 rounded-xl transition font-sans shadow-lg shadow-indigo-500/10"
+                                    >
+                                      Submit Audit Report
+                                    </button>
+                                  </div>
                                 </form>
                               )}
                             </div>
-                          ) : (
-                            <div className="h-[450px] flex flex-col items-center justify-center border border-dashed border-slate-800 bg-slate-950/40 rounded-2xl text-center p-8 gap-3">
-                              <div className="p-4 bg-slate-900 rounded-full border border-slate-800 text-slate-500">
-                                {execTab === 'active' ? (
-                                  <ClipboardList className="w-8 h-8 text-indigo-500/70" />
-                                ) : (
-                                  <History className="w-8 h-8 text-emerald-500/70" />
-                                )}
-                              </div>
-                              <h4 className="text-sm font-bold text-slate-300">
-                                {execTab === 'active' ? 'No Task Selected' : 'No Report Selected'}
-                              </h4>
-                              <p className="text-xs text-slate-500 max-w-xs leading-relaxed">
-                                {execTab === 'active' 
-                                  ? 'Select an active field task from the left list to fill out and submit the verification checklist.' 
-                                  : 'Select a completed store from the left list to review its submitted report details, recommendation, and compliance history.'}
-                              </p>
-                            </div>
-                          )}
-                        </div>
-
-                      </div>
+                          </div>
+                        )}
+                      </>
                     ) : (
                       <div className="py-12 border border-slate-800 border-dashed rounded-2xl text-center text-slate-550 text-xs">
                         No visit assignments dispatched. Go to Command Center (Admin) to assign this Inspector.
@@ -3765,6 +4013,22 @@ export default function App() {
                                       <div className="col-span-2 border-t border-slate-900 pt-2">
                                         <span className="text-slate-550 block">SUBMITTED INVOICE METRICS</span>
                                         <pre className="text-[9px] text-slate-400 bg-slate-900 p-2 rounded mt-1 overflow-x-auto whitespace-pre font-mono">{adminSelectedDispute.mockInvoiceText}</pre>
+                                      </div>
+                                    )}
+                                    {adminSelectedDispute.disputeImage && (
+                                      <div className="col-span-2 border-t border-slate-900 pt-2">
+                                        <span className="text-slate-550 block mb-1">RECEIPT IMAGE EVIDENCE</span>
+                                        <div className="w-full h-24 rounded bg-slate-900 overflow-hidden border border-slate-800 flex items-center justify-center">
+                                          <img 
+                                            src={adminSelectedDispute.disputeImage} 
+                                            alt="Receipt Evidence" 
+                                            className="h-full w-auto object-contain cursor-zoom-in hover:scale-105 transition"
+                                            onClick={() => {
+                                              const w = window.open();
+                                              w.document.write(`<img src="${adminSelectedDispute.disputeImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+                                            }}
+                                          />
+                                        </div>
                                       </div>
                                     )}
                                   </div>
@@ -4318,7 +4582,7 @@ export default function App() {
 
       {selectedDisputeDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/85 backdrop-blur-sm p-4 animate-fade-in">
-          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-lg w-full shadow-2xl flex flex-col gap-5 relative overflow-hidden">
+          <div className="bg-slate-900 border border-slate-800 rounded-2xl p-6 max-w-4xl w-full shadow-2xl flex flex-col gap-5 relative overflow-hidden">
             {/* Header */}
             <div className="flex justify-between items-start border-b border-slate-800 pb-3">
               <div>
@@ -4330,67 +4594,102 @@ export default function App() {
               </div>
               <button 
                 onClick={() => setSelectedDisputeDetail(null)}
-                className="text-slate-400 hover:text-slate-200 text-sm font-bold bg-slate-800/80 p-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-800 transition"
+                className="text-slate-500 hover:text-slate-100 hover:bg-slate-200/50 text-sm font-bold bg-slate-800/80 p-1.5 rounded-lg border border-slate-700/50 transition"
               >
                 ✕ Close
               </button>
             </div>
 
+            {/* Penalty applied thank you banner */}
+            {selectedDisputeDetail.penaltyApplied && (
+              <div className="flex items-center gap-3 p-3.5 bg-emerald-55/60 text-emerald-800 rounded-xl border border-emerald-200 text-xs">
+                <ShieldCheck className="w-5 h-5 text-emerald-600 flex-shrink-0" />
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-bold text-emerald-900">Thank you for reporting!</span>
+                  <span className="text-[10px] text-emerald-750">Your pricing dispute was verified, and a penalty was applied to the store. This helps keep MedSafe safe and fair.</span>
+                </div>
+              </div>
+            )}
+
             {/* Body */}
-            <div className="flex flex-col gap-4 text-xs font-mono">
-              <div className="grid grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
-                <div>
-                  <span className="text-[9px] text-slate-500 block uppercase">Dispute ID</span>
-                  <span className="font-bold text-slate-200 text-[10px] truncate block">{selectedDisputeDetail._id}</span>
+            <div className={`grid grid-cols-1 ${selectedDisputeDetail.disputeImage ? 'md:grid-cols-12' : ''} gap-6 text-xs font-mono`}>
+              {/* Left Column: text details */}
+              <div className={`flex flex-col gap-4 ${selectedDisputeDetail.disputeImage ? 'md:col-span-7' : 'w-full'}`}>
+                <div className="grid grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-850">
+                  <div>
+                    <span className="text-[9px] text-slate-500 block uppercase">Dispute ID</span>
+                    <span className="font-bold text-slate-100 text-[10px] truncate block">{selectedDisputeDetail._id}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-slate-500 block uppercase">Ticket Status</span>
+                    <span className={`inline-block font-bold mt-1 px-2 py-0.5 rounded text-[9px] border ${
+                      selectedDisputeDetail.status === 'Resolved' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' :
+                      selectedDisputeDetail.status === 'Dismissed' ? 'bg-slate-900 text-slate-500 border border-slate-800' :
+                      selectedDisputeDetail.responseFromPharmacy ? 'bg-blue-50 text-blue-800 border border-blue-200' :
+                      'bg-amber-50 text-amber-800 border border-amber-200 animate-pulse'
+                    }`}>
+                      {selectedDisputeDetail.status === 'Pending'
+                        ? (selectedDisputeDetail.responseFromPharmacy ? 'Under Admin Review' : 'Awaiting Store Response')
+                        : selectedDisputeDetail.status}
+                    </span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-slate-500 block uppercase">Accused Store</span>
+                    <span className="font-bold text-slate-100 font-sans mt-0.5 block">{selectedDisputeDetail.pharmacyName}</span>
+                  </div>
+                  <div>
+                    <span className="text-[9px] text-slate-500 block uppercase">Violation Type</span>
+                    <span className="font-bold text-rose-750 mt-0.5 block">{selectedDisputeDetail.type}</span>
+                  </div>
                 </div>
-                <div>
-                  <span className="text-[9px] text-slate-500 block uppercase">Ticket Status</span>
-                  <span className={`inline-block font-bold mt-1 px-2 py-0.5 rounded text-[9px] ${
-                    selectedDisputeDetail.status === 'Resolved' ? 'bg-emerald-500/10 text-emerald-400 border border-emerald-500/20' :
-                    selectedDisputeDetail.status === 'Dismissed' ? 'bg-slate-800 text-slate-400' :
-                    selectedDisputeDetail.responseFromPharmacy ? 'bg-blue-500/10 text-blue-400 border border-blue-500/20' :
-                    'bg-amber-500/10 text-amber-400 animate-pulse border border-amber-500/20'
-                  }`}>
-                    {selectedDisputeDetail.status === 'Pending'
-                      ? (selectedDisputeDetail.responseFromPharmacy ? 'Under Admin Review' : 'Awaiting Store Response')
-                      : selectedDisputeDetail.status}
-                  </span>
+
+                {/* Description */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                  <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Customer Complaint Description</span>
+                  <p className="text-slate-100 text-[11px] leading-relaxed italic font-medium">
+                    "{selectedDisputeDetail.description}"
+                  </p>
                 </div>
-                <div>
-                  <span className="text-[9px] text-slate-500 block uppercase">Accused Store</span>
-                  <span className="font-bold text-slate-200 font-sans mt-0.5 block">{selectedDisputeDetail.pharmacyName}</span>
-                </div>
-                <div>
-                  <span className="text-[9px] text-slate-500 block uppercase">Violation Type</span>
-                  <span className="font-bold text-red-400 mt-0.5 block">{selectedDisputeDetail.type}</span>
+
+                {/* Store Response */}
+                <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
+                  <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Pharmacy Owner Response / Appeal</span>
+                  {selectedDisputeDetail.responseFromPharmacy ? (
+                    <p className="text-slate-100 text-[11px] font-medium leading-relaxed italic bg-slate-900 p-2 rounded border border-slate-800">
+                      "{selectedDisputeDetail.responseFromPharmacy}"
+                    </p>
+                  ) : (
+                    <p className="text-slate-500 text-[11px] leading-relaxed italic">
+                      Awaiting response from pharmacy owner.
+                    </p>
+                  )}
                 </div>
               </div>
 
-              {/* Description */}
-              <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
-                <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Customer Complaint Description</span>
-                <p className="text-slate-300 text-[11px] leading-relaxed italic">
-                  "{selectedDisputeDetail.description}"
-                </p>
-              </div>
-
-              {/* Store Response */}
-              <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 font-sans">
-                <span className="text-[9px] text-slate-500 font-mono block mb-1 uppercase">Pharmacy Owner Response / Appeal</span>
-                {selectedDisputeDetail.responseFromPharmacy ? (
-                  <p className="text-teal-400 text-[11px] font-bold leading-relaxed italic bg-teal-500/5 p-2 rounded border border-teal-500/10">
-                    "{selectedDisputeDetail.responseFromPharmacy}"
-                  </p>
-                ) : (
-                  <p className="text-slate-550 text-[11px] leading-relaxed italic">
-                    Awaiting response from pharmacy owner.
-                  </p>
-                )}
-              </div>
+              {/* Right Column: receipt invoice image evidence */}
+              {selectedDisputeDetail.disputeImage && (
+                <div className="md:col-span-5 flex flex-col">
+                  <div className="bg-slate-950 p-4 rounded-xl border border-slate-850 h-full flex flex-col">
+                    <span className="text-[9px] text-slate-500 font-mono block mb-2 uppercase">Uploaded Invoice Evidence</span>
+                    <div className="w-full flex-1 min-h-[220px] rounded bg-slate-900 overflow-hidden border border-slate-800 flex items-center justify-center">
+                      <img 
+                        src={selectedDisputeDetail.disputeImage} 
+                        alt="Invoice Receipt Evidence" 
+                        className="max-h-64 w-auto object-contain cursor-zoom-in hover:scale-105 transition"
+                        onClick={() => {
+                          const w = window.open();
+                          w.document.write(`<img src="${selectedDisputeDetail.disputeImage}" style="max-width:100%; max-height:100vh; display:block; margin:auto;" />`);
+                        }}
+                      />
+                    </div>
+                    <span className="text-[8px] text-slate-500 block text-right mt-1.5 font-mono">Click receipt image to enlarge</span>
+                  </div>
+                </div>
+              )}
             </div>
 
             {/* Footer buttons */}
-            <div className="flex justify-end gap-3 mt-1">
+            <div className="flex justify-end gap-3 mt-1 border-t border-slate-800 pt-4">
               <button
                 onClick={() => downloadRoleReport('customer_dispute', {
                   title: 'Anti-Fraud Price Mismatch Dispute Details',
@@ -4403,9 +4702,59 @@ export default function App() {
               </button>
               <button
                 onClick={() => setSelectedDisputeDetail(null)}
-                className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-6 rounded-xl text-xs transition border border-slate-700"
+                className="bg-slate-900 hover:bg-slate-800 text-slate-100 font-bold py-2.5 px-6 rounded-xl text-xs transition border border-slate-800"
               >
                 Close Ticket View
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showCameraModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-950/90 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 max-w-md w-full shadow-2xl flex flex-col gap-5 relative overflow-hidden">
+            <div className="flex justify-between items-center border-b border-slate-800 pb-3">
+              <div>
+                <span className="text-[9px] font-mono text-indigo-400 uppercase tracking-widest font-bold">Hardware Interface</span>
+                <h3 className="text-sm font-bold text-slate-100 mt-0.5">Capture Receipt Invoice</h3>
+              </div>
+              <button 
+                onClick={stopCamera}
+                className="text-slate-400 hover:text-slate-200 text-xs font-bold bg-slate-800/80 px-2.5 py-1.5 rounded-lg border border-slate-700/50 hover:bg-slate-850 transition"
+              >
+                ✕ Cancel
+              </button>
+            </div>
+
+            {/* Video Feed */}
+            <div className="relative aspect-[4/3] w-full bg-black rounded-2xl overflow-hidden border border-slate-800 flex items-center justify-center">
+              <video 
+                ref={videoRef} 
+                autoPlay 
+                playsInline 
+                className="w-full h-full object-cover" 
+              />
+              <div className="absolute inset-8 border-2 border-dashed border-indigo-500/40 rounded-xl pointer-events-none flex items-center justify-center">
+                <span className="text-[10px] font-mono text-slate-400 bg-slate-950/70 px-2.5 py-1 rounded border border-slate-800/50">Align Receipt Within Frame</span>
+              </div>
+            </div>
+
+            {/* Controls */}
+            <div className="flex gap-3 justify-end mt-1">
+              <button
+                type="button"
+                onClick={stopCamera}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-350 font-bold py-2.5 px-6 rounded-xl text-xs transition border border-slate-700"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                onClick={capturePhoto}
+                className="bg-indigo-600 hover:bg-indigo-500 text-white font-extrabold py-2.5 px-6 rounded-xl text-xs transition shadow-lg shadow-indigo-500/10 flex items-center gap-1.5"
+              >
+                <Camera className="w-4 h-4" /> Take Snapshot
               </button>
             </div>
           </div>

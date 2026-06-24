@@ -110,6 +110,7 @@ const ComplaintSchema = new Schema({
   type: { type: String, enum: ['Price Mismatch', 'Fake Medicine', 'Other'], required: true },
   description: { type: String, required: true },
   billImage: { type: String },
+  disputeImage: { type: String },
   status: { type: String, enum: ['Pending', 'Resolved', 'Dismissed'], default: 'Pending' },
   responseFromPharmacy: { type: String, default: '' },
   penaltyApplied: { type: Boolean, default: false }

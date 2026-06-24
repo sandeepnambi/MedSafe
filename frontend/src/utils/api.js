@@ -124,7 +124,7 @@ const initLocalStorageDB = () => {
   }
 
   if (!localStorage.getItem('medsafe_complaints')) {
-    localStorage.setItem('medsafe_complaints', []);
+    localStorage.setItem('medsafe_complaints', JSON.stringify([]));
   }
 
   if (!localStorage.getItem('medsafe_reports')) {
@@ -194,11 +194,11 @@ const request = async (endpoint, options = {}) => {
   }
 
   // Fallback to LocalStorage Engine
-  return handleLocalStorageRequest(endpoint, options);
+  return await handleLocalStorageRequest(endpoint, options);
 };
 
 // Simulated LocalStorage Backend Router
-const handleLocalStorageRequest = (endpoint, options = {}) => {
+const handleLocalStorageRequest = async (endpoint, options = {}) => {
   const method = options.method || 'GET';
   const body = options.body ? JSON.parse(options.body) : null;
 
@@ -484,19 +484,46 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     return pharmacies.filter(p => p.status === 'Approved & Verified');
   }
 
+  if (endpoint === '/customer/medicines') {
+    const activeStores = pharmacies.filter(p => p.status === 'Approved & Verified' && p.isLaunched);
+    const storeIds = activeStores.map(s => s._id);
+
+    const listings = inventory.filter(i => 
+      storeIds.includes(i.pharmacyId) && 
+      i.stock > 0 && 
+      i.isAvailable
+    );
+
+    const stockedMedIds = [...new Set(listings.map(l => l.medicineId))];
+    return medicines.filter(m => stockedMedIds.includes(m._id));
+  }
+
   if (endpoint.startsWith('/customer/search')) {
     const urlParams = new URLSearchParams(endpoint.split('?')[1]);
     const query = urlParams.get('query') || '';
+    const medicineId = urlParams.get('medicineId') || '';
     
     const activeStores = pharmacies.filter(p => p.status === 'Approved & Verified' && p.isLaunched);
     const storeIds = activeStores.map(s => s._id);
 
-    const matchedMeds = medicines.filter(m => 
-      m.name.toLowerCase().includes(query.toLowerCase()) || 
-      m.genericName.toLowerCase().includes(query.toLowerCase()) ||
-      m.saltComposition.toLowerCase().includes(query.toLowerCase()) ||
-      m.category.toLowerCase().includes(query.toLowerCase())
-    );
+    let matchedMeds = [];
+    if (medicineId) {
+      matchedMeds = medicines.filter(m => m._id === medicineId);
+    }
+    
+    if (matchedMeds.length === 0 && query) {
+      matchedMeds = medicines.filter(m => 
+        m.name.toLowerCase().includes(query.toLowerCase()) || 
+        m.genericName.toLowerCase().includes(query.toLowerCase()) ||
+        m.saltComposition.toLowerCase().includes(query.toLowerCase()) ||
+        m.category.toLowerCase().includes(query.toLowerCase())
+      );
+    }
+
+    if (matchedMeds.length === 0) {
+      return [];
+    }
+
     const matchedMedIds = matchedMeds.map(m => m._id);
 
     const listings = inventory.filter(i => 
@@ -505,7 +532,17 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
       i.isAvailable
     );
 
-    const res = listings.map(l => {
+    // Deduplicate inventory listings by (pharmacyId + medicineId), keeping the lowest price
+    const uniqueListingsMap = {};
+    for (const l of listings) {
+      const key = `${l.pharmacyId}_${l.medicineId}`;
+      if (!uniqueListingsMap[key] || l.price < uniqueListingsMap[key].price) {
+        uniqueListingsMap[key] = l;
+      }
+    }
+    const filteredListings = Object.values(uniqueListingsMap);
+
+    const res = filteredListings.map(l => {
       const store = activeStores.find(s => s._id === l.pharmacyId);
       const med = matchedMeds.find(m => m._id === l.medicineId);
       return {
@@ -544,8 +581,40 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
     };
   }
 
+  if (endpoint === '/ocr/parse' && method === 'POST') {
+    const { disputeImage } = body;
+    const apiKey = 'K84447493388957';
+    
+    const ocrFormData = new FormData();
+    ocrFormData.append('apikey', apiKey);
+    ocrFormData.append('base64Image', disputeImage);
+    ocrFormData.append('language', 'eng');
+    ocrFormData.append('isOverlayRequired', 'false');
+
+    try {
+      const ocrRes = await fetch('https://api.ocr.space/parse/image', {
+        method: 'POST',
+        body: ocrFormData
+      });
+      const ocrData = await ocrRes.json();
+      let parsedText = '';
+      if (ocrData.ParsedResults && ocrData.ParsedResults.length > 0) {
+        parsedText = ocrData.ParsedResults[0].ParsedText;
+      } else {
+        parsedText = ocrData.ErrorMessage || 'No text parsed.';
+      }
+      return {
+        imageUrl: disputeImage,
+        parsedText
+      };
+    } catch (err) {
+      console.error(err);
+      throw new Error('Local OCR Space call failed: ' + err.message);
+    }
+  }
+
   if (endpoint === '/customer/lodge-complaint' && method === 'POST') {
-    const { pharmacyId, type, description, mockInvoiceText } = body;
+    const { pharmacyId, type, description, mockInvoiceText, disputeImage } = body;
     const user = getLoggedInUser();
     const store = pharmacies.find(p => p._id === pharmacyId);
     
@@ -573,7 +642,9 @@ const handleLocalStorageRequest = (endpoint, options = {}) => {
       customerId: user?._id || 'mock_cust',
       customerName: user?.name || 'Rahul Sharma',
       type,
-      description: ocrPriceAlert ? `${description} [AUTO-FLAGGED] ${priceMismatchDetails}` : description,
+      description: description,
+      billImage: mockInvoiceText || '',
+      disputeImage: disputeImage || '',
       status: 'Pending',
       createdAt: new Date().toISOString()
     };

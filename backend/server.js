@@ -9,6 +9,15 @@ import dotenv from 'dotenv';
 // Load environment variables
 dotenv.config();
 
+import { v2 as cloudinary } from 'cloudinary';
+
+// Configure Cloudinary
+cloudinary.config({
+  cloud_name: process.env.CLOUDINARY_CLOUD_NAME,
+  api_key: process.env.CLOUDINARY_API_KEY,
+  api_secret: process.env.CLOUDINARY_API_SECRET,
+});
+
 // Import local database controllers
 import { connectDB, getModel, getDBType } from './config/db.js';
 import './models/Schemas.js'; // Ensure models are registered on Mongoose
@@ -761,22 +770,50 @@ app.get('/api/customer/pharmacies', authenticateToken, requireRole(['customer', 
   }
 });
 
-// Geolocation-Based & Price-Comparing Search (Customer Feature)
-app.get('/api/customer/search', async (req, res) => {
+// List all medicines stocked in at least one verified & launched pharmacy with stock >= 1
+app.get('/api/customer/medicines', authenticateToken, requireRole(['customer', 'admin']), async (req, res) => {
   try {
-    const { query } = req.query; // search drug name, compositions, etc.
     const Pharmacy = getModel('Pharmacy');
     const Inventory = getModel('Inventory');
     const Medicine = getModel('Medicine');
 
-    // Only search within verified and launched pharmacies
-    const verifiedStoresRaw = await Pharmacy.find({ status: 'Approved & Verified', isLaunched: true });
-    const verifiedStores = await enrichPharmacyList(verifiedStoresRaw);
-    const verifiedStoreIds = verifiedStores.map(store => store._id);
+    // 1. Get all verified & launched store IDs
+    const activeStores = await Pharmacy.find({ status: 'Approved & Verified', isLaunched: true });
+    const activeStoreIds = activeStores.map(s => s._id.toString());
 
-    // Find matching medicines (name, generic name, salt composition)
+    // 2. Find matching inventory listings with stock >= 1
+    const inventoryListings = await Inventory.find({
+      pharmacyId: { $in: activeStoreIds },
+      stock: { $gt: 0 },
+      isAvailable: true
+    });
+
+    // 3. Get unique medicine IDs from those inventory listings
+    const stockedMedIds = [...new Set(inventoryListings.map(l => l.medicineId.toString()))];
+
+    // 4. Fetch the medicines matching those IDs
+    const list = await Medicine.find({ _id: { $in: stockedMedIds } });
+    res.json(list);
+  } catch (error) {
+    res.status(500).json({ message: 'Failed to fetch customer medicines', error: error.message });
+  }
+});
+
+// Geolocation-Based & Price-Comparing Search (Customer Feature)
+app.get('/api/customer/search', async (req, res) => {
+  try {
+    const { query, medicineId } = req.query; // search drug name, compositions, etc., or specific medicine ID
+    const Pharmacy = getModel('Pharmacy');
+    const Inventory = getModel('Inventory');
+    const Medicine = getModel('Medicine');
+
+    // 1. Find matching medicines (either by direct medicineId or name query)
     let medicineQuery = {};
-    if (query) {
+    const isValidObjectId = /^[0-9a-fA-F]{24}$/.test(medicineId || '');
+
+    if (medicineId && isValidObjectId) {
+      medicineQuery = { _id: medicineId };
+    } else if (query) {
       medicineQuery = {
         $or: [
           { name: { $regex: query, $options: 'i' } },
@@ -785,24 +822,57 @@ app.get('/api/customer/search', async (req, res) => {
           { category: { $regex: query, $options: 'i' } }
         ]
       };
+    } else {
+      return res.json([]);
     }
 
     const matchedMeds = await Medicine.find(medicineQuery);
-    const matchedMedIds = matchedMeds.map(med => med._id);
+    const matchedMedIds = matchedMeds.map(med => med._id.toString());
 
-    // Fetch matching stock listings inside verified pharmacies
+    // 2. Fetch matching stock listings inside any pharmacy
     const inventoryListings = await Inventory.find({
-      pharmacyId: { $in: verifiedStoreIds },
       medicineId: { $in: matchedMedIds },
       isAvailable: true
     });
 
-    // Compile comparisons
-    const results = inventoryListings.map(listing => {
-      const store = verifiedStores.find(s => s._id.toString() === listing.pharmacyId.toString());
+    if (inventoryListings.length === 0) {
+      return res.json([]);
+    }
+
+    // 3. Deduplicate inventory listings by (pharmacyId + medicineId), keeping the lowest price
+    const uniqueListingsMap = {};
+    for (const listing of inventoryListings) {
+      const key = `${listing.pharmacyId}_${listing.medicineId}`;
+      if (!uniqueListingsMap[key] || listing.price < uniqueListingsMap[key].price) {
+        uniqueListingsMap[key] = listing;
+      }
+    }
+    const filteredListings = Object.values(uniqueListingsMap);
+
+    // 4. Extract unique pharmacy IDs from matching filtered listings
+    const candidatePharmacyIds = [...new Set(filteredListings.map(l => l.pharmacyId))];
+
+    // 5. Fetch and enrich ONLY the verified & launched pharmacies that actually have the stock
+    const verifiedStoresRaw = await Pharmacy.find({
+      _id: { $in: candidatePharmacyIds },
+      status: 'Approved & Verified',
+      isLaunched: true
+    });
+    const verifiedStores = await enrichPharmacyList(verifiedStoresRaw);
+    const verifiedStoreMap = {};
+    verifiedStores.forEach(store => {
+      verifiedStoreMap[store._id.toString()] = store;
+    });
+
+    // 6. Compile comparisons, filtering out any listing where the pharmacy is not verified/launched
+    const results = [];
+    for (const listing of filteredListings) {
+      const store = verifiedStoreMap[listing.pharmacyId.toString()];
+      if (!store) continue; // Skip if pharmacy is not verified or is not launched
+
       const med = matchedMeds.find(m => m._id.toString() === listing.medicineId.toString());
 
-      return {
+      results.push({
         _id: listing._id,
         price: listing.price,
         stock: listing.stock,
@@ -816,10 +886,10 @@ app.get('/api/customer/search', async (req, res) => {
           warningsCount: store.warningsCount,
           inventoryUpdateFrequency: store.inventoryUpdateFrequency
         }
-      };
-    });
+      });
+    }
 
-    // Order by price ascending
+    // 7. Order by price ascending
     results.sort((a, b) => a.price - b.price);
 
     res.json(results);
@@ -866,7 +936,7 @@ app.get('/api/customer/recommendations', async (req, res) => {
 // OCR Price Matching & Dispute Logging
 app.post('/api/customer/lodge-complaint', authenticateToken, requireRole(['customer']), async (req, res) => {
   try {
-    const { pharmacyId, type, description, mockInvoiceText } = req.body;
+    const { pharmacyId, type, description, mockInvoiceText, disputeImage } = req.body;
     const Pharmacy = getModel('Pharmacy');
     const Complaint = getModel('Complaint');
     const Inventory = getModel('Inventory');
@@ -901,8 +971,9 @@ app.post('/api/customer/lodge-complaint', authenticateToken, requireRole(['custo
       customerId: req.user.id,
       customerName: req.user.name,
       type,
-      description: ocrPriceAlert ? `${description} [AUTO-FLAGGED] ${priceMismatchDetails}` : description,
-      billImage: 'https://images.unsplash.com/photo-1554415707-6e8cfc93fe23?auto=format&fit=crop&w=400&q=80',
+      description,
+      billImage: mockInvoiceText || '',
+      disputeImage: disputeImage || '',
       status: 'Pending'
     });
 
@@ -911,6 +982,61 @@ app.post('/api/customer/lodge-complaint', authenticateToken, requireRole(['custo
     res.status(201).json({ complaint, ocrPriceAlert });
   } catch (error) {
     res.status(500).json({ message: 'Complaint logging failed', error: error.message });
+  }
+});
+
+// Real Cloudinary Upload & OCR Space Parser Endpoint
+app.post('/api/ocr/parse', authenticateToken, async (req, res) => {
+  try {
+    const { disputeImage } = req.body;
+    if (!disputeImage) {
+      return res.status(400).json({ message: 'No image data provided' });
+    }
+
+    // Upload base64 image data to Cloudinary
+    const uploadRes = await cloudinary.uploader.upload(disputeImage, {
+      folder: 'medsafe_receipts',
+    });
+
+    const imageUrl = uploadRes.secure_url;
+
+    // Call OCR Space API
+    const apiKey = process.env.OCR_SPACE_API_KEY || 'K84447493388957';
+    
+    const ocrParams = new URLSearchParams();
+    ocrParams.append('apikey', apiKey);
+    ocrParams.append('url', imageUrl);
+    ocrParams.append('language', 'eng');
+    ocrParams.append('isOverlayRequired', 'false');
+
+    const ocrRes = await fetch('https://api.ocr.space/parse/image', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+      },
+      body: ocrParams.toString(),
+    });
+
+    if (!ocrRes.ok) {
+      throw new Error(`OCR Space API returned status ${ocrRes.status}`);
+    }
+
+    const ocrData = await ocrRes.json();
+    
+    let parsedText = '';
+    if (ocrData.ParsedResults && ocrData.ParsedResults.length > 0) {
+      parsedText = ocrData.ParsedResults[0].ParsedText;
+    } else {
+      parsedText = ocrData.ErrorMessage || 'No text could be parsed from the image.';
+    }
+
+    res.status(200).json({
+      imageUrl,
+      parsedText,
+    });
+  } catch (error) {
+    console.error('OCR Parsing endpoint error:', error);
+    res.status(500).json({ message: 'OCR parsing failed', error: error.message });
   }
 });
 
@@ -925,14 +1051,9 @@ app.get('/api/customer/my-complaints', authenticateToken, requireRole(['customer
   }
 });
 
-// Seed data route helper
+// Seed data route helper (disabled)
 app.post('/api/admin/seed', async (req, res) => {
-  try {
-    await seedDatabase();
-    res.json({ message: 'Seeding successful!' });
-  } catch (error) {
-    res.status(500).json({ error: error.message });
-  }
+  res.status(403).json({ message: 'Database seeding has been permanently disabled to protect manual data.' });
 });
 
 // Global health check
@@ -945,363 +1066,11 @@ app.get('/api/health', (req, res) => {
   });
 });
 
-// ----------------- Database Seeding Engine -----------------
-const seedDatabase = async () => {
-  const User = getModel('User');
-  const Medicine = getModel('Medicine');
-  const Pharmacy = getModel('Pharmacy');
-  const Inventory = getModel('Inventory');
-  const Complaint = getModel('Complaint');
-  const AuditLog = getModel('AuditLog');
-
-  // Clear collections for fresh seeding
-  await User.deleteMany({});
-  await Medicine.deleteMany({});
-  await Pharmacy.deleteMany({});
-  await Inventory.deleteMany({});
-  await Complaint.deleteMany({});
-  await AuditLog.deleteMany({});
-
-  // Create user accounts
-  const p123456 = await bcrypt.hash('123456', 10);
-  const pDefault = await bcrypt.hash('password123', 10);
-
-  // Seed gmail.com users
-  const custGmail = await User.create({ name: 'Gmail Customer', email: 'customer@gmail.com', password: p123456, role: 'customer' });
-  const adminGmail = await User.create({ name: 'Gmail Admin', email: 'admin@gmail.com', password: p123456, role: 'admin' });
-  const execGmail = await User.create({ name: 'Inspector Dan', email: 'executive@gmail.com', password: p123456, role: 'executive' });
-
-  // Seed store owner accounts with gmail.com (all password: 123456, role: pharmacy)
-  const ownerSunil = await User.create({ name: 'Sunil Mehta', email: 'sunil@gmail.com', password: p123456, role: 'pharmacy' });
-  const ownerRajesh = await User.create({ name: 'Rajesh Sharma', email: 'rajesh@gmail.com', password: p123456, role: 'pharmacy' });
-  const ownerAnil = await User.create({ name: 'Anil Deshmukh', email: 'anil@gmail.com', password: p123456, role: 'pharmacy' });
-  const ownerAster = await User.create({ name: 'Sunil Mehta (Aster)', email: 'aster@gmail.com', password: p123456, role: 'pharmacy' });
-  const ownerGuardian = await User.create({ name: 'Devin Patel (Guardian)', email: 'guardian@gmail.com', password: p123456, role: 'pharmacy' });
-  const pharmacyGmail = await User.create({ name: 'Devin Patel (LifeCare)', email: 'pharmacy@gmail.com', password: p123456, role: 'pharmacy' });
-  const ownerMetro = await User.create({ name: 'Rajesh Sharma (Metro)', email: 'metro@gmail.com', password: p123456, role: 'pharmacy' });
-
-  // Seed medsafe.com users (for fast switch buttons in UI) and more inspectors
-  const custMed = await User.create({ name: 'Rahul Sharma', email: 'customer@medsafe.com', password: pDefault, role: 'customer' });
-  const adminMed = await User.create({ name: 'SuperAdmin', email: 'admin@medsafe.com', password: pDefault, role: 'admin' });
-  const execMed = await User.create({ name: 'Inspector Vikram', email: 'executive@medsafe.com', password: pDefault, role: 'executive' });
-  const pharmacyMed = await User.create({ name: 'Devin Patel', email: 'pharmacy@medsafe.com', password: pDefault, role: 'pharmacy' });
-
-  // Additional verification executives/inspectors (total of 5)
-  await User.create({ name: 'Inspector Rohan', email: 'inspector.rohan@medsafe.com', password: pDefault, role: 'executive' });
-  await User.create({ name: 'Inspector Priya', email: 'inspector.priya@medsafe.com', password: pDefault, role: 'executive' });
-  await User.create({ name: 'Inspector Amit', email: 'inspector.amit@medsafe.com', password: pDefault, role: 'executive' });
-
-  // Seed essential medicines
-  const meds = [
-    {
-      name: 'Paracetamol 650mg',
-      brandName: 'Calpol 650',
-      genericName: 'Acetaminophen',
-      saltComposition: 'Paracetamol IP 650mg',
-      category: 'Painkiller',
-      barcode: '8901138814013',
-      alternatives: ['Crocin 650', 'Dolo 650', 'Pyrigesic 650']
-    },
-    {
-      name: 'Amoxicillin 500mg',
-      brandName: 'Mox 500',
-      genericName: 'Amoxicillin Trihydrate',
-      saltComposition: 'Amoxicillin 500mg',
-      category: 'Antibiotic',
-      barcode: '8901235123512',
-      alternatives: ['Amoxil 500', 'Novamox 500', 'Cipmox 500']
-    },
-    {
-      name: 'Metformin 500mg',
-      brandName: 'Glycomet 500',
-      genericName: 'Metformin Hydrochloride',
-      saltComposition: 'Metformin IP 500mg',
-      category: 'Antihyperglycemic',
-      barcode: '8902526312451',
-      alternatives: ['Obimet 500', 'Metformin generic', 'Riomet 500']
-    },
-    {
-      name: 'Atorvastatin 10mg',
-      brandName: 'Lipvas 10',
-      genericName: 'Atorvastatin Calcium',
-      saltComposition: 'Atorvastatin 10mg',
-      category: 'Statin',
-      barcode: '8901509124239',
-      alternatives: ['Lipitor 10', 'Atorva 10', 'Tonact 10']
-    },
-    {
-      name: 'Cetirizine 10mg',
-      brandName: 'Okacet 10',
-      genericName: 'Cetirizine Dihydrochloride',
-      saltComposition: 'Cetirizine 10mg',
-      category: 'Antihistamine',
-      barcode: '8901043004561',
-      alternatives: ['Zyrtec 10', 'Cetzine 10', 'Alerid 10']
-    },
-    {
-      name: 'Ibuprofen 400mg',
-      brandName: 'Combiflam',
-      genericName: 'Ibuprofen IP 400mg',
-      saltComposition: 'Ibuprofen 400mg',
-      category: 'Painkiller',
-      barcode: '8901234567890',
-      alternatives: ['Brufen 400', 'Ibugesic 400', 'Flanzen 400']
-    },
-    {
-      name: 'Pantoprazole 40mg',
-      brandName: 'Pan 40',
-      genericName: 'Pantoprazole Sodium',
-      saltComposition: 'Pantoprazole 40mg',
-      category: 'Antacid',
-      barcode: '8909876543210',
-      alternatives: ['Pantocid 40', 'Pantodac 40', 'Nupenta 40']
-    },
-    {
-      name: 'Azithromycin 500mg',
-      brandName: 'Azithral 500',
-      genericName: 'Azithromycin Dihydrate',
-      saltComposition: 'Azithromycin 500mg',
-      category: 'Antibiotic',
-      barcode: '8904561237890',
-      alternatives: ['Azee 500', 'Azibact 500', 'Azithro 500']
-    },
-    {
-      name: 'Montelukast 10mg',
-      brandName: 'Montair 10',
-      genericName: 'Montelukast Sodium',
-      saltComposition: 'Montelukast Sodium IP 10mg',
-      category: 'Antiasthmatic',
-      barcode: '8906000000001',
-      alternatives: ['Telekast 10', 'Singulair 10', 'Montus 10']
-    },
-    {
-      name: 'Loratadine 10mg',
-      brandName: 'Claritin 10',
-      genericName: 'Loratadine',
-      saltComposition: 'Loratadine USP 10mg',
-      category: 'Antihistamine',
-      barcode: '8907000000002',
-      alternatives: ['Lorasyn 10', 'Alavert 10', 'Lupilor 10']
-    }
-  ];
-
-  const createdMeds = [];
-  for (const m of meds) {
-    const created = await Medicine.create(m);
-    createdMeds.push(created);
-  }
-
-  // Seed verified pharmacy 1
-  const store1 = await Pharmacy.create({
-    name: 'Wellness Forever Pharmacy',
-    ownerName: 'Sunil Mehta',
-    ownerId: String(ownerSunil._id),
-    address: 'Shop 12, Highstreet Mall, MG Road, Pune',
-    contact: '+91 9823456789',
-    drugLicense: 'DL-2035-MH2049',
-    gstNumber: '27AAAAA1111A1Z1',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED', 'ISO_9001_COMPLIANT'],
-    storeImages: ['https://images.unsplash.com/photo-1607619056574-7b8f304b3c8c?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'MedSafe-Link Integrator',
-    status: 'Approved & Verified',
-    preferredVisitDate: '2026-05-30',
-    storeTimings: '8 AM - 11 PM',
-    barcodeSystemAvailable: true,
-    billingSoftwareAvailable: true,
-    debitCreditAvailable: true,
-    assignedExecutiveId: String(execMed._id),
-    assignedExecutiveName: 'Inspector Vikram',
-    trustScore: 98,
-    inventoryUpdateFrequency: 'Real-time Integrator',
-    isLaunched: true
-  });
-
-  // Seed verified pharmacy 2
-  const store2 = await Pharmacy.create({
-    name: 'Apollo Pharmacy Prime',
-    ownerName: 'Rajesh Sharma',
-    ownerId: String(ownerRajesh._id),
-    address: 'Shop 4, Gold Plaza, Main Street, Pune',
-    contact: '+91 9765432100',
-    drugLicense: 'DL-4021-MH2051',
-    gstNumber: '27CCCCC3333C3Z3',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
-    storeImages: ['https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'Apollo-Sync Billing v4',
-    status: 'Approved & Verified',
-    preferredVisitDate: '2026-05-28',
-    storeTimings: '24 Hours Open',
-    barcodeSystemAvailable: true,
-    billingSoftwareAvailable: true,
-    debitCreditAvailable: true,
-    assignedExecutiveId: String(execMed._id),
-    assignedExecutiveName: 'Inspector Vikram',
-    trustScore: 95,
-    inventoryUpdateFrequency: 'Real-time Integrator',
-    isLaunched: true
-  });
-
-  // Seed verified pharmacy 3
-  const store3 = await Pharmacy.create({
-    name: 'MedPlus SuperChemists',
-    ownerName: 'Anil Deshmukh',
-    ownerId: String(ownerAnil._id),
-    address: 'Sector 5, Kasturba Gandhi Road, Pune',
-    contact: '+91 9123456780',
-    drugLicense: 'DL-5032-MH2055',
-    gstNumber: '27DDDDD4444D4Z4',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
-    storeImages: ['https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'MedPlus-Pos System',
-    status: 'Approved & Verified',
-    preferredVisitDate: '2026-05-29',
-    storeTimings: '9 AM - 10 PM',
-    barcodeSystemAvailable: true,
-    billingSoftwareAvailable: true,
-    debitCreditAvailable: true,
-    assignedExecutiveId: String(execMed._id),
-    assignedExecutiveName: 'Inspector Vikram',
-    trustScore: 92,
-    inventoryUpdateFrequency: 'Daily',
-    isLaunched: true
-  });
-
-  // Seed verified pharmacy 4
-  const store4 = await Pharmacy.create({
-    name: 'Aster Pharmacy',
-    ownerName: 'Sunil Mehta',
-    ownerId: String(ownerAster._id),
-    address: 'Shop 8, Hiranandani Estate, Thane, Mumbai',
-    contact: '+91 8888777766',
-    drugLicense: 'DL-6028-MH3050',
-    gstNumber: '27EEEEE5555E5Z5',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
-    storeImages: ['https://images.unsplash.com/photo-1576091160550-2173dba999ef?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'Aster-Sync POS v2',
-    status: 'Approved & Verified',
-    preferredVisitDate: '2026-05-30',
-    storeTimings: '8 AM - 10 PM',
-    barcodeSystemAvailable: true,
-    billingSoftwareAvailable: true,
-    debitCreditAvailable: true,
-    assignedExecutiveId: String(execMed._id),
-    assignedExecutiveName: 'Inspector Vikram',
-    trustScore: 96,
-    inventoryUpdateFrequency: 'Real-time Integrator',
-    isLaunched: true
-  });
-
-  // Seed verified pharmacy 5
-  const store5 = await Pharmacy.create({
-    name: 'Guardian Healthcare',
-    ownerName: 'Devin Patel',
-    ownerId: String(ownerGuardian._id),
-    address: 'Block B, Niti Marg, Chanakyapuri, New Delhi',
-    contact: '+91 7777666655',
-    drugLicense: 'DL-7039-MH3060',
-    gstNumber: '27FFFFF6666F6Z6',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
-    storeImages: ['https://images.unsplash.com/photo-1607619056574-7b8f304b3c8c?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'Guardian-Cloud Billing',
-    status: 'Approved & Verified',
-    preferredVisitDate: '2026-05-28',
-    storeTimings: '9 AM - 9 PM',
-    barcodeSystemAvailable: true,
-    billingSoftwareAvailable: true,
-    debitCreditAvailable: true,
-    assignedExecutiveId: String(execMed._id),
-    assignedExecutiveName: 'Inspector Vikram',
-    trustScore: 94,
-    inventoryUpdateFrequency: 'Daily',
-    isLaunched: true
-  });
-
-  // Seed inventories for verified pharmacies (1 to 5)
-  const storeList = [store1, store2, store3, store4, store5];
-  const priceSets = [
-    [15, 45, 12, 55, 8, 10, 18, 30, 22, 14],
-    [13, 48, 10, 58, 9, 8, 20, 28, 24, 12],
-    [16, 42, 14, 52, 7, 11, 17, 32, 20, 15],
-    [14, 46, 11, 56, 8, 9, 19, 29, 21, 13],
-    [15, 44, 13, 54, 8, 10, 18, 31, 23, 14]
-  ];
-
-  for (let sIdx = 0; sIdx < storeList.length; sIdx++) {
-    const store = storeList[sIdx];
-    const prices = priceSets[sIdx];
-    for (let i = 0; i < createdMeds.length; i++) {
-      await Inventory.create({
-        pharmacyId: String(store._id),
-        medicineId: String(createdMeds[i]._id),
-        medicineName: createdMeds[i].name,
-        price: prices[i] || 15,
-        stock: Math.floor(Math.random() * 50) + 30,
-        isAvailable: true
-      });
-    }
-  }
-
-  // Seed pharmacy 6 (Pending verification request, Devin Patel / pharmacyGmail._id)
-  await Pharmacy.create({
-    name: 'LifeCare Chemist & Druggist',
-    ownerName: 'Devin Patel',
-    ownerId: String(pharmacyGmail._id),
-    address: 'Ground Floor, Tulip Plaza, Sector 4, Mumbai',
-    contact: '+91 9998887776',
-    drugLicense: 'DL-9041-MH3011',
-    gstNumber: '27BBBBB2222B2Z2',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
-    storeImages: ['https://images.unsplash.com/photo-1586015555751-63bb77f4322a?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'None',
-    status: 'Pending Verification Request',
-    preferredVisitDate: '2026-06-20',
-    storeTimings: '9 AM - 10 PM',
-    barcodeSystemAvailable: false,
-    billingSoftwareAvailable: false,
-    debitCreditAvailable: false,
-    setupAssistanceRequirements: 'Need guidance setting up automated inventory sync API.',
-    trustScore: 100
-  });
-
-  // Seed pharmacy 7 (Verification Requested, Metro Medicos)
-  await Pharmacy.create({
-    name: 'Metro Medicos & Healthcare',
-    ownerName: 'Rajesh Sharma',
-    ownerId: String(ownerMetro._id),
-    address: 'Shop 2, Metro Station Plaza, Sector 15, Noida',
-    contact: '+91 9555443322',
-    drugLicense: 'DL-8032-UP3022',
-    gstNumber: '09AAAAA2222A2Z2',
-    certifications: ['GST_CERTIFICATE_UPLOADED', 'DRUG_LICENSE_UPLOADED'],
-    storeImages: ['https://images.unsplash.com/photo-1584308666744-24d5c474f2ae?auto=format&fit=crop&w=800&q=80'],
-    billingSoftware: 'None',
-    status: 'Verification Requested',
-    preferredVisitDate: '2026-06-25',
-    storeTimings: '9 AM - 9 PM',
-    barcodeSystemAvailable: true,
-    billingSoftwareAvailable: false,
-    debitCreditAvailable: true,
-    setupAssistanceRequirements: 'Need support linking Marg POS system.',
-    trustScore: 100
-  });
-
-  console.log('💚 Database Seeding Completed Successfully!');
-};
+// ----------------- Database Seeding Engine (Removed) -----------------
 
 // Initiate database connection
 connectDB().then(async () => {
-  try {
-    const User = getModel('User');
-    const hasAmit = await User.findOne({ email: 'inspector.amit@medsafe.com' });
-    if (!hasAmit) {
-      console.log('Seed inspectors not found. Seeding initial database data...');
-      await seedDatabase();
-    } else {
-      console.log('Database already contains records. Skipping auto-seeding to protect data.');
-    }
-  } catch (err) {
-    console.error('Database count/seeding check failed:', err);
-  }
+  console.log('💚 Database connection initialized. Seeding logic has been disabled.');
 });
 
 // Start Express Listener
