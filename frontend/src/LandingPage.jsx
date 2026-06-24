@@ -418,9 +418,9 @@ export default function LandingPage({ onLogin, onRegister, onRegisterPharmacy })
             <div className="trust-ring-wrapper">
               <svg width="240" height="240" viewBox="0 0 240 240">
                 {/* Background track */}
-                <circle className="trust-circle-bg" cx="120" cy="120" r="100" stroke-width="14" fill="none" />
+                <circle className="trust-circle-bg" cx="120" cy="120" r="100" strokeWidth="14" fill="none" />
                 {/* Active stroke progress */}
-                <circle className="trust-circle-progress" id="trustCircle" cx="120" cy="120" r="100" stroke-width="14" fill="none"
+                <circle className="trust-circle-progress" id="trustCircle" cx="120" cy="120" r="100" strokeWidth="14" fill="none"
                         strokeDasharray="628.32" strokeDashoffset="628.32" />
               </svg>
               <div className="trust-ring-text">

@@ -11,6 +11,7 @@ import {
 } from 'recharts';
 import { api, checkServerHealth } from './utils/api';
 import LandingPage from './LandingPage';
+import { downloadRoleReport } from './utils/pdfGenerator';
 
 export default function App() {
   // Beautify username helper (e.g., SANDEEP.NAMBIO8 -> Sandeep)
@@ -1619,9 +1620,22 @@ export default function App() {
                                 {/* Generic Alternatives Recommendations */}
                                 {recommendations && recommendations.targetMedicine && (
                                   <div className="bg-white p-6 rounded-2xl border border-blue-200 shadow-sm flex flex-col gap-4">
-                                    <div className="flex items-center gap-2 text-blue-700">
-                                      <TrendingUp className="w-5 h-5" />
-                                      <h3 className="text-[10px] text-teal-500 font-mono uppercase tracking-wider block font-bold">AI Generic Savings Advisory Engine</h3>
+                                    <div className="flex justify-between items-center flex-wrap gap-2 text-blue-700">
+                                      <div className="flex items-center gap-2">
+                                        <TrendingUp className="w-5 h-5" />
+                                        <h3 className="text-[10px] text-teal-500 font-mono uppercase tracking-wider block font-bold">AI Generic Savings Advisory Engine</h3>
+                                      </div>
+                                      <button
+                                        onClick={() => downloadRoleReport('customer_alternatives', {
+                                          title: 'Medicine Alternatives & Substitution Guide',
+                                          subtitle: `Active Molecule: ${recommendations.targetMedicine.genericName}`,
+                                          medicine: recommendations.targetMedicine,
+                                          alternatives: recommendations.alternatives
+                                        })}
+                                        className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1 px-2.5 rounded-lg text-[9px] font-mono transition flex items-center gap-1 shadow-sm"
+                                      >
+                                        <FileText className="w-3 h-3" /> Download Guide
+                                      </button>
                                     </div>
                                     
                                     <div className="text-sm font-bold text-slate-100 mt-0.5">
@@ -2117,23 +2131,43 @@ export default function App() {
                         <div className="flex items-center justify-between flex-wrap gap-4">
                           <div>
                             <span className="text-[10px] font-mono text-slate-500">PHARMACY ONBOARDING ID: {myPharmacy._id}</span>
-                            <h2 className="text-base font-bold text-slate-100 mt-1 flex items-center gap-2">
-                              {myPharmacy.name}
-                              {myPharmacy.isLaunched && (
-                                <div className="relative inline-flex items-center justify-center bg-red-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded shadow-sm tracking-widest leading-none mr-2 font-mono ml-1.5 select-none">
-                                  LIVE
-                                  <div className="absolute -top-1.5 -right-2 bg-white rounded-full p-[1px] shadow-sm border border-red-200 flex items-center justify-center">
-                                    <span className="relative flex h-2.5 w-2.5">
-                                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
-                                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-650 items-center justify-center">
-                                        <Radio className="w-1.5 h-1.5 text-white" />
+                            <div className="flex items-center gap-3 mt-1 flex-wrap">
+                              <h2 className="text-base font-bold text-slate-100 flex items-center gap-2">
+                                {myPharmacy.name}
+                                {myPharmacy.isLaunched && (
+                                  <div className="relative inline-flex items-center justify-center bg-red-600 text-white font-extrabold text-[10px] px-2 py-0.5 rounded shadow-sm tracking-widest leading-none mr-2 font-mono ml-1.5 select-none">
+                                    LIVE
+                                    <div className="absolute -top-1.5 -right-2 bg-white rounded-full p-[1px] shadow-sm border border-red-200 flex items-center justify-center">
+                                      <span className="relative flex h-2.5 w-2.5">
+                                        <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-red-400 opacity-75"></span>
+                                        <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-red-650 items-center justify-center">
+                                          <Radio className="w-1.5 h-1.5 text-white" />
+                                        </span>
                                       </span>
-                                    </span>
+                                    </div>
                                   </div>
-                                </div>
-                              )}
-                            </h2>
-                            <p className="text-xs text-slate-400">{myPharmacy.address}</p>
+                                )}
+                              </h2>
+                              <button
+                                onClick={() => downloadRoleReport('pharmacy_onboarding', {
+                                  title: 'Pharmacy Store Onboarding Status Dossier',
+                                  subtitle: `Store ID: ${myPharmacy._id}`,
+                                  store: myPharmacy,
+                                  checklist: {
+                                    licenceVerified: ['Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status),
+                                    gstVerified: ['Verification In Progress', 'Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status),
+                                    qualityChecked: ['Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status),
+                                    noExpiredStock: ['Under Admin Review', 'Approved & Verified'].includes(myPharmacy.status),
+                                    barcodeConfigured: ['Approved & Verified'].includes(myPharmacy.status),
+                                    staffTrained: ['Approved & Verified'].includes(myPharmacy.status)
+                                  }
+                                })}
+                                className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1 px-2.5 rounded-lg text-[9px] font-mono transition flex items-center gap-1 shadow-sm mt-0.5"
+                              >
+                                <FileText className="w-3 h-3" /> Download Dossier PDF
+                              </button>
+                            </div>
+                            <p className="text-xs text-slate-400 mt-1">{myPharmacy.address}</p>
                             {myPharmacy.assignedExecutiveName && (
                               <div className="mt-3 flex items-center gap-2 text-xs text-indigo-800 bg-indigo-50 border border-indigo-200 px-3 py-1.5 rounded-xl w-fit">
                                 <User className="w-3.5 h-3.5 text-indigo-600" />
@@ -2325,7 +2359,7 @@ export default function App() {
                               <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">Inventory Stock Distribution (Top 8 Items)</span>
                               {inventoryChartData.length > 0 ? (
                                 <div className="h-40 w-full text-[10px] font-sans">
-                                  <ResponsiveContainer width="100%" height="100%">
+                                  <ResponsiveContainer width="100%" height={160}>
                                     <BarChart data={inventoryChartData}>
                                       <XAxis dataKey="name" stroke="#64748b" tickLine={false} />
                                       <YAxis stroke="#64748b" tickLine={false} />
@@ -2449,7 +2483,20 @@ export default function App() {
                               <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
                                 <ClipboardList className="w-4 h-4 text-teal-400" /> Current Store Inventory Stock List
                               </h3>
-                              <span className="text-[10px] font-mono text-slate-500">{pharmacyInventory.length} Active SKUs</span>
+                              <div className="flex items-center gap-2">
+                                <span className="text-[10px] font-mono text-slate-500">{pharmacyInventory.length} Active SKUs</span>
+                                <button
+                                  onClick={() => downloadRoleReport('pharmacy_inventory', {
+                                    title: 'Pharmacy Verified Stock Catalog',
+                                    subtitle: `Pharmacy Store: ${myPharmacy.name}`,
+                                    store: myPharmacy,
+                                    inventory: pharmacyInventory
+                                  })}
+                                  className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1 px-2.5 rounded-lg text-[9px] font-mono transition flex items-center gap-1 shadow-sm"
+                                >
+                                  <FileText className="w-3 h-3" /> Export Catalog PDF
+                                </button>
+                              </div>
                             </div>
 
                             {pharmacyInventory.length > 0 ? (
@@ -2875,9 +2922,32 @@ export default function App() {
                               {execTab === 'past' || ['Under Admin Review', 'Approved & Verified', 'Rejected', 'Needs Corrections'].includes(activeAssignment.status) ? (
                                 <div className="flex flex-col gap-5 p-5 bg-slate-900 border border-slate-800 rounded-2xl animate-fade-in text-xs font-mono">
                                   <div className="flex flex-col sm:flex-row justify-between sm:items-center gap-2 pb-3 border-b border-slate-800">
-                                    <div>
-                                      <span className="text-[9px] text-slate-500 font-sans block">ONBOARDING REPORT IDENTIFIER</span>
-                                      <h4 className="text-sm font-bold text-slate-100 font-sans mt-0.5">Audit Questionnaire Submitted</h4>
+                                    <div className="flex items-center justify-between flex-wrap gap-2 w-full">
+                                      <div>
+                                        <span className="text-[9px] text-slate-500 font-sans block">ONBOARDING REPORT IDENTIFIER</span>
+                                        <h4 className="text-sm font-bold text-slate-100 font-sans mt-0.5">Audit Questionnaire Submitted</h4>
+                                      </div>
+                                      {(matchedReport || ['Under Admin Review', 'Approved & Verified', 'Rejected', 'Needs Corrections'].includes(activeAssignment.status)) && (
+                                        <button
+                                          onClick={() => downloadRoleReport('executive_audit', {
+                                            title: 'On-Site Field Audit Compliance Report',
+                                            subtitle: `Audited Pharmacy Store: ${activeAssignment.name}`,
+                                            store: activeAssignment,
+                                            report: matchedReport || {
+                                              executiveName: activeAssignment.assignedExecutiveName || 'Inspector Vikram',
+                                              executiveId: activeAssignment.assignedExecutiveId || 'mock_exec',
+                                              recommendation: activeAssignment.status === 'Approved & Verified' ? 'Approved' : 'Needs Corrections',
+                                              certificationStatus: 'Pass',
+                                              medicineQualityStatus: 'Pass',
+                                              inventorySetupStatus: 'Completed',
+                                              complianceNotes: activeAssignment.adminComments || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'
+                                            }
+                                          })}
+                                          className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1 px-2.5 rounded-lg text-[9px] font-mono transition flex items-center gap-1 shadow-sm mt-1 sm:mt-0 animate-fade-in"
+                                        >
+                                          <FileText className="w-3 h-3" /> Download Audit PDF
+                                        </button>
+                                      )}
                                     </div>
                                     <div className={`px-2.5 py-1 rounded text-[10px] font-bold border uppercase tracking-wider self-start sm:self-auto ${
                                       activeAssignment.status === 'Approved & Verified' 
@@ -3264,6 +3334,28 @@ export default function App() {
                   {/* 1. Analytics Tab */}
                   {adminTab === 'analytics' && (
                     <div className="flex flex-col gap-8 animate-fade-in">
+                      <div className="flex justify-between items-center bg-slate-950 p-4 border border-slate-800 rounded-2xl">
+                        <div>
+                          <h3 className="text-xs font-bold text-slate-100 font-sans uppercase tracking-wider">Super Admin Operations Analytics</h3>
+                          <p className="text-[11px] text-slate-555 mt-0.5">Real-time indicators tracking store activation timeline status levels.</p>
+                        </div>
+                        <button
+                          onClick={() => downloadRoleReport('admin_analytics', {
+                            title: 'MedSafe Security Platform Analytics Dashboard',
+                            subtitle: `Platform Overview Registry Summary`,
+                            stats: {
+                              approvedCount: adminPharmacies.filter(p => p.status === 'Approved & Verified').length,
+                              pendingCount: adminPharmacies.filter(p => p.status === 'Verification Requested').length,
+                              activeDisputesCount: adminComplaints.filter(c => c.status === 'Pending').length,
+                              totalUsers: adminUsers.length || 24
+                            },
+                            stores: adminPharmacies
+                          })}
+                          className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1.5 px-3.5 rounded-xl text-[10px] font-mono transition flex items-center gap-1 shadow-md shadow-teal-500/10"
+                        >
+                          <FileText className="w-3.5 h-3.5" /> Export Analytics PDF
+                        </button>
+                      </div>
                       {/* KPI Statistics Row */}
                       <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
                         {[
@@ -3300,7 +3392,7 @@ export default function App() {
                             <span className="text-[10px] text-slate-400 font-mono uppercase tracking-wider">Platform Security & Pharmacy Trust Index Analytics</span>
                             {adminChartData.length > 0 ? (
                               <div className="h-40 w-full text-[10px] font-sans">
-                                <ResponsiveContainer width="100%" height="100%">
+                                <ResponsiveContainer width="100%" height={160}>
                                   <AreaChart data={adminChartData}>
                                     <XAxis dataKey="name" stroke="#64748b" tickLine={false} />
                                     <YAxis domain={[0, 100]} stroke="#64748b" tickLine={false} />
@@ -3458,11 +3550,24 @@ export default function App() {
 
                                   {rep && (
                                     <div className="p-3.5 bg-slate-950 rounded-lg border border-slate-800 flex flex-col gap-2 text-xs">
-                                      <div className="flex justify-between items-center">
+                                      <div className="flex justify-between items-center flex-wrap gap-2">
                                         <span className="font-bold font-mono text-[10px] text-slate-400">INSPECTION REPORT BY: {rep.executiveName}</span>
-                                        <span className="font-bold text-emerald-400 font-mono text-[10px]">RECOMMENDATION: {rep.recommendation}</span>
+                                        <div className="flex items-center gap-2">
+                                          <button
+                                            onClick={() => downloadRoleReport('executive_audit', {
+                                              title: 'On-Site Field Audit Compliance Report',
+                                              subtitle: `Audited Pharmacy Store: ${store.name}`,
+                                              store: store,
+                                              report: rep
+                                            })}
+                                            className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-0.5 px-2 rounded-md text-[9px] font-mono transition flex items-center gap-1 shadow-sm"
+                                          >
+                                            <FileText className="w-3 h-3" /> Download Audit PDF
+                                          </button>
+                                          <span className="font-bold text-emerald-400 font-mono text-[10px]">RECOMMENDATION: {rep.recommendation}</span>
+                                        </div>
                                       </div>
-                                      <p className="text-slate-350 font-mono text-[11px]">"{rep.complianceNotes || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'}"</p>
+                                      <p className="text-slate-350 font-mono text-[11px] mt-1">"{rep.complianceNotes || 'Inspection complete, certificates validated successfully. Storage temperature within constraints.'}"</p>
                                     </div>
                                   )}
 
@@ -3622,17 +3727,29 @@ export default function App() {
                                       <h3 className="text-sm font-bold text-slate-100 mt-1">{adminSelectedDispute.pharmacyName}</h3>
                                       <span className="text-[10px] text-red-400 font-mono block">{adminSelectedDispute.type}</span>
                                     </div>
-                                    <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border uppercase ${
-                                      adminSelectedDispute.status === 'Resolved' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
-                                      adminSelectedDispute.status === 'Dismissed' ? 'bg-slate-800 border-slate-850 text-slate-400' :
-                                      adminSelectedDispute.responseFromPharmacy
-                                        ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
-                                        : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
-                                    }`}>
-                                      {adminSelectedDispute.status === 'Pending'
-                                        ? (adminSelectedDispute.responseFromPharmacy ? 'Under Review' : 'Awaiting Response')
-                                        : adminSelectedDispute.status}
-                                    </span>
+                                    <div className="flex items-center gap-2">
+                                      <button
+                                        onClick={() => downloadRoleReport('admin_dispute', {
+                                          title: 'MedSafe SuperAdmin Case Adjudication Record',
+                                          subtitle: `Dispute Case ID: ${adminSelectedDispute._id}`,
+                                          complaint: adminSelectedDispute
+                                        })}
+                                        className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1 px-2.5 rounded-lg text-[9px] font-mono transition flex items-center gap-1 shadow-sm animate-fade-in"
+                                      >
+                                        <FileText className="w-3 h-3" /> Download Case PDF
+                                      </button>
+                                      <span className={`px-2 py-0.5 rounded text-[9px] font-mono font-bold border uppercase ${
+                                        adminSelectedDispute.status === 'Resolved' ? 'bg-emerald-500/10 border-emerald-500/20 text-emerald-400' :
+                                        adminSelectedDispute.status === 'Dismissed' ? 'bg-slate-800 border-slate-850 text-slate-400' :
+                                        adminSelectedDispute.responseFromPharmacy
+                                          ? 'bg-blue-500/10 border-blue-500/20 text-blue-400'
+                                          : 'bg-amber-500/10 border-amber-500/20 text-amber-400'
+                                      }`}>
+                                        {adminSelectedDispute.status === 'Pending'
+                                          ? (adminSelectedDispute.responseFromPharmacy ? 'Under Review' : 'Awaiting Response')
+                                          : adminSelectedDispute.status}
+                                      </span>
+                                    </div>
                                   </div>
 
                                   <div className="grid grid-cols-2 gap-4 text-[10px] font-mono bg-slate-950 p-3 rounded-lg border border-slate-850">
@@ -4099,11 +4216,23 @@ export default function App() {
                   {/* 6. Platform Logs Tab */}
                   {adminTab === 'logs' && (
                     <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col gap-4 animate-fade-in">
-                      <div className="border-b border-slate-900 pb-3">
-                        <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
-                          <FileText className="w-4 h-4 text-slate-400" /> Platform Compliance Security Audit Trail
-                        </h3>
-                        <p className="text-xs text-slate-400 mt-1">Strict tamper-proof log trail recording pharmacy registrations, executive audit reports, and billing sync actions.</p>
+                      <div className="border-b border-slate-900 pb-3 flex justify-between items-center flex-wrap gap-2">
+                        <div>
+                          <h3 className="text-sm font-bold text-slate-100 flex items-center gap-2">
+                            <FileText className="w-4 h-4 text-slate-400" /> Platform Compliance Security Audit Trail
+                          </h3>
+                          <p className="text-xs text-slate-400 mt-1">Strict tamper-proof log trail recording pharmacy registrations, executive audit reports, and billing sync actions.</p>
+                        </div>
+                        <button
+                          onClick={() => downloadRoleReport('admin_logs', {
+                            title: 'MedSafe Cryptographic Platform Audit Trail Log',
+                            subtitle: `System-wide activity audit stream log registry`,
+                            logs: adminLogs
+                          })}
+                          className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-1.5 px-3.5 rounded-xl text-[10px] font-mono transition flex items-center gap-1 shadow-md shadow-teal-500/10"
+                        >
+                          <FileText className="w-3.5 h-3.5" /> Export Logs PDF
+                        </button>
                       </div>
 
                       <div className="h-[480px] overflow-y-auto border border-slate-800 bg-slate-900 rounded-xl p-4 flex flex-col gap-2 font-mono text-[10px]">
@@ -4262,6 +4391,16 @@ export default function App() {
 
             {/* Footer buttons */}
             <div className="flex justify-end gap-3 mt-1">
+              <button
+                onClick={() => downloadRoleReport('customer_dispute', {
+                  title: 'Anti-Fraud Price Mismatch Dispute Details',
+                  subtitle: `Dispute reference ID: ${selectedDisputeDetail._id}`,
+                  complaint: selectedDisputeDetail
+                })}
+                className="bg-teal-500 hover:bg-teal-400 text-slate-950 font-black py-2.5 px-6 rounded-xl text-xs transition flex items-center gap-1.5 shadow-md shadow-teal-500/10"
+              >
+                <FileText className="w-4 h-4" /> Download PDF Report
+              </button>
               <button
                 onClick={() => setSelectedDisputeDetail(null)}
                 className="bg-slate-800 hover:bg-slate-700 text-slate-300 font-bold py-2.5 px-6 rounded-xl text-xs transition border border-slate-700"
